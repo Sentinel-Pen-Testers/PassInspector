@@ -1,0 +1,4 @@
+xlsxwriter
+neo4j
+requests
+windows-curses; platform_system == "Windows"
