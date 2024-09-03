@@ -12,7 +12,7 @@ import xlsxwriter
 """This script is created to parse through cracked passwords to find weak patterns that can be added to the report."""
 
 NEO4J_PASSWORD = "bloodhoundcommunityedition"
-NEO4J_QUIRIES = {"admins": "MATCH (u:User)-[:MemberOf]->(g:Group) WHERE toUpper(g.name) CONTAINS 'DOMAIN ADMINS' OR "
+NEO4J_QUERIES = {"admins": "MATCH (u:User)-[:MemberOf]->(g:Group) WHERE toUpper(g.name) CONTAINS 'DOMAIN ADMINS' OR "
                            "g.name CONTAINS 'ENTERPRISE ADMINS' OR g.name STARTS WITH 'ADMINISTRATORS@' RETURN "
                            "DISTINCT toLower(u.domain) + '\\\\' + toLower(u.samaccountname) AS user",
                  "enabled": "MATCH (u:User) WHERE u.enabled=true RETURN tolower(u.domain) + '\\\\' + "
@@ -103,7 +103,7 @@ def group_lookup(query, group_filename):
     if group_filename:
         group = file_to_userlist(group_filename)
     elif NEO4J_PASSWORD:
-        group = neo4j_query(NEO4J_QUIRIES[query])
+        group = neo4j_query(NEO4J_QUERIES[query])
     else:
         group = []
 
@@ -788,7 +788,7 @@ def cred_stuffing_check(cred_stuffing_accounts, dcsync_results):
     for cred_stuffing_account in cred_stuffing_accounts:
         for dcsync_account in dcsync_results:
             if cred_stuffing_account['USERNAME'].lower() == dcsync_account['USERNAME'].lower() and cred_stuffing_account['PASSWORD'] == dcsync_account['PASSWORD']:
-                cred_stuffing_matches.append(f"{cred_stuffing_account["USERNAME"]}:{cred_stuffing_account['PASSWORD']}")
+                cred_stuffing_matches.append(f"{cred_stuffing_account['USERNAME']}:{cred_stuffing_account['PASSWORD']}")
     if len(cred_stuffing_matches) > 0:
         text_results = f"There were {len(cred_stuffing_matches)} valid credential stuffing password(s) found to be valid"
     return text_results, cred_stuffing_matches
