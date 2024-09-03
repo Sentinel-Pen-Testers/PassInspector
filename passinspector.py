@@ -11,81 +11,38 @@ import xlsxwriter
 
 """This script is created to parse through cracked passwords to find weak patterns that can be added to the report."""
 
+NEO4J_PASSWORD = "bloodhoundcommunityedition"
+NEO4J_QUERIES = {"admins": "MATCH (u:User)-[:MemberOf]->(g:Group) WHERE toUpper(g.name) CONTAINS 'DOMAIN ADMINS' OR "
+                           "g.name CONTAINS 'ENTERPRISE ADMINS' OR g.name STARTS WITH 'ADMINISTRATORS@' RETURN "
+                           "DISTINCT toLower(u.domain) + '\\\\' + toLower(u.samaccountname) AS user",
+                 "enabled": "MATCH (u:User) WHERE u.enabled=true RETURN tolower(u.domain) + '\\\\' + "
+                            "tolower(u.samaccountname) AS user",
+                 "kerberoastable": "MATCH (u:User)WHERE u.hasspn=true RETURN tolower(u.domain) + '\\\\' + "
+                                   "tolower(u.samaccountname) AS user"}
+NEO4J_URI = f"neo4j://localhost"
+NEO4J_USERNAME = "neo4j"
+
+
 def central_station(search_terms, admin_users, enabled_users, dcsync_filename, passwords_filename, students_filename,
                     spray_users_filename, spray_passwords_filename, cred_stuffing_filename, cred_stuffing_domains,
-                    kerberoastable_users, duplicate_password_identifier, file_datetime, neo4j_URI, neo4j_username,
-                    neo4j_password, local_hash_filename):
+                    kerberoastable_users, duplicate_password_identifier, file_datetime, local_hash_filename):
     # Designed to figure out what actions will need to take place depending on the file types provided
-    if not file_datetime:
-        file_datetime = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    if not dcsync_filename:
-        dcsync_filename = find_file([file_datetime, "dcsync"])
-        if dcsync_filename:
-            print(f"No DCSync file was provided, but a DCSync file was found: {dcsync_filename}")
-        else:
-            print("ERROR: No DCSync file provided or located automatically. Cannot continue!")
-            exit()
-    if not passwords_filename:
-        passwords_filename = find_file([file_datetime, "cracked"], ['allcracked'])
-        if passwords_filename:
-            print(f"No cracked file was provided, but a cracked file was found: {passwords_filename}")
-        else:
-            print("ERROR: No cracked file file provided or located automatically. Cannot continue!")
-            exit()
+    file_datetime, dcsync_filename, passwords_filename = get_filenames(file_datetime, dcsync_filename, passwords_filename)
     dcsync_results = []  # All results and values
     dcsync_results_cracked = []  # Values for any cracked user credential
 
-    dcsync_file_lines = open_dcsync_file(dcsync_filename)
-    dcsync_file_lines, cleartext_creds = filter_cleartext(dcsync_file_lines)  # Extract cleartext credentials
-    dcsync_file_lines = filter_nonntlm(dcsync_file_lines)  # Filter out lines without NTLM Hashes
-    dcsync_file_lines = filter_machines(dcsync_file_lines)  # Filter out machine accounts
+    dcsync_file_lines = open_file(dcsync_filename)
+    dcsync_file_lines, cleartext_creds = filter_dcsync_file(dcsync_file_lines)
 
-    print("De-duplicating passwords")
-    password_file_lines = open_password_file(passwords_filename)
+    password_file_lines = open_file(passwords_filename)
     password_file_lines = deduplicate_passwords(password_file_lines)
 
-    if cred_stuffing_filename:
-        cred_stuffing_accounts = open_cred_stuffing_file(cred_stuffing_filename)
-    elif os.path.isfile("passinspector_dehashed_results.txt"):
-        cred_stuffing_accounts = import_dehashed_file()
-    elif cred_stuffing_domains or neo4j_password:
-        # If a credential_stuffing domain is provided, search with DeHashed
-        # If a password for Neo4j was provided, it will try to pull the email domain from AD
-        # MATCH (u:User) WHERE u.email IS NOT NULL RETURN distinct(split(u.email, '@')[1]) as DOMAIN
-        cred_stuffing_accounts = retrieve_cred_stuffing_results(cred_stuffing_domains, neo4j_URI, neo4j_username, neo4j_password)
-    else:
-        cred_stuffing_accounts = []
+    cred_stuffing_accounts = get_cred_stuffing(cred_stuffing_filename, cred_stuffing_domains)
 
-    # Take admin_users file if presented, otherwise query neo4j if info was provided, otherwise just assign a blank value
-    if admin_users:
-        admin_users = file_to_userlist(admin_users)
-    elif neo4j_password:
-        admin_users_query = (
-            "MATCH (u:User)-[:MemberOf]->(g:Group) "
-            "WHERE toUpper(g.name) CONTAINS 'DOMAIN ADMINS' OR g.name CONTAINS 'ENTERPRISE ADMINS' OR g.name STARTS WITH 'ADMINISTRATORS@' "
-            "RETURN DISTINCT toLower(u.domain) + '\\\\' + toLower(u.samaccountname) AS user"
-        )
-        admin_users = neo4j_query(admin_users_query, neo4j_URI, neo4j_username, neo4j_password)
-    else:
-        admin_users = []
-
-    # Take enabled_users file if presented, otherwise query neo4j if info was provided, otherwise just assign a blank value
-    if enabled_users:
-        enabled_users = file_to_userlist(enabled_users)
-    elif neo4j_password:
-        enabled_users_query = "MATCH (u:User) WHERE u.enabled=true RETURN tolower(u.domain) + '\\\\' + tolower(u.samaccountname) AS user"
-        enabled_users = neo4j_query(enabled_users_query, neo4j_URI, neo4j_username, neo4j_password)
-    else:
-        enabled_users = []
-
-    # Take kerberoastable_users file if presented, otherwise query neo4j if info was provided, otherwise just assign a blank value
-    if kerberoastable_users:
-        kerberoastable_users = file_to_userlist(kerberoastable_users)
-    elif neo4j_password:
-        krb_user_query = "MATCH (u:User)WHERE u.hasspn=true RETURN tolower(u.domain) + '\\\\' + tolower(u.samaccountname) AS user"
-        kerberoastable_users = neo4j_query(krb_user_query, neo4j_URI, neo4j_username, neo4j_password)
-    else:
-        kerberoastable_users = []
+    # Take users from a file, otherwise query neo4j if info was provided, otherwise just assign a blank value
+    admin_users = group_lookup("admins", admin_users)
+    enabled_users = group_lookup("enabled", enabled_users)
+    kerberoastable_users = group_lookup("kerberoastable", kerberoastable_users)
 
     # Check on the domains that were found to make sure they match
     dcsync_file_lines, admin_users, enabled_users, kerberoastable_users = check_domains(dcsync_file_lines, admin_users,
@@ -120,7 +77,6 @@ def central_station(search_terms, admin_users, enabled_users, dcsync_filename, p
     text_cred_stuffing, result_cred_stuffing = cred_stuffing_check(cred_stuffing_accounts, dcsync_results)
     dcsync_results, num_spray_matches, num_pass_spray_matches = check_if_spray(dcsync_results, spray_users_filename,
                                                                                spray_passwords_filename)
-    # dcsync_results = kerberostable_inspection(dcsync_results, kerberoastable_users, neo4j_URI, neo4j_username, neo4j_password)
     dcsync_results = count_pass_repeat(dcsync_results)
     if duplicate_password_identifier:
         dcsync_results = calc_duplicate_password_identifier(dcsync_results)
@@ -142,6 +98,18 @@ def print_and_log(message, log):
     log = message + "\n"
     return log
 
+
+def group_lookup(query, group_filename):
+    if group_filename:
+        group = file_to_userlist(group_filename)
+    elif NEO4J_PASSWORD:
+        group = neo4j_query(NEO4J_QUERIES[query])
+    else:
+        group = []
+
+    return group
+
+
 def fix_bad_passwords(dcsync_results):
     i = 0
     while i < len(dcsync_results):
@@ -153,52 +121,19 @@ def fix_bad_passwords(dcsync_results):
     return dcsync_results
 
 
-def open_dcsync_file(l_filename):
-    file_lines = []
-    print("Opening DCSync file")
-    try:
-        with open(l_filename, 'r', encoding='utf8') as file:
-            for line in file:
-                line = line.rstrip('\n')  # Remove newline character from the line
-                if line:
-                    file_lines.append(line)
-    except FileNotFoundError:
-        print("ERROR: Could not find DCSync file using the filename provided: ", dcsync_filename, "\n")
-        exit(1)
-
-    return file_lines
-
-
-def open_password_file(l_filename):
-    print("Opening cracked passwords file")
+def open_file(l_filename):
+    print(f"Opening {l_filename}")
     lines = []
     try:
         with open(l_filename, 'r') as file:
             for line in file:
                 if line:
-                    lines.append(line)
+                    lines.append(line.strip())
     except FileNotFoundError:
-        print("ERROR: Could not find passwords file using the filename provided: ", passwords_filename, "\n")
+        print(f"ERROR: Could not find file using the filename provided: {l_filename}")
         exit(1)
-
     return lines
 
-def open_cred_stuffing_file(l_filename):
-    # Returns credential stuffing in a list of [{"USERNAME": username, "PASSWORD": password}]
-    print("Opening credential stuffing file")
-    credentials = []
-    try:
-        with open(l_filename, 'r') as file:
-            for line in file:
-                line = line.strip() # Remove new line characters
-                if line:
-                    email, password = line.split(':', 1)
-                    username = email.split('@')[0]
-                    credentials.append({"USERNAME": username, "PASSWORD": password})
-    except FileNotFoundError:
-        print("ERROR: Could not find credential stuffing file using the filename provided: ", l_filename, "\n")
-        exit(1)
-    return credentials
 
 def check_if_spray(l_dcsync_results, l_spray_users_filename, l_spray_passwords_filename):
     l_num_spray_matches = 0
@@ -584,6 +519,7 @@ def parse_dcsync_line(line, password_file_lines, admin_users, enabled_users, ker
 
 
 def deduplicate_passwords(password_file_lines):
+    print("De-duplicating passwords")
     unique_lines = set()
     for line in password_file_lines:
         unique_lines.add(line)
@@ -1296,6 +1232,13 @@ def filter_machines(l_dcsync):
     return filtered_dcsync
 
 
+def filter_dcsync_file(dcsync_file_lines):
+    dcsync_file_lines, cleartext_creds = filter_cleartext(dcsync_file_lines)  # Extract cleartext credentials
+    dcsync_file_lines = filter_nonntlm(dcsync_file_lines)  # Filter out lines without NTLM Hashes
+    dcsync_file_lines = filter_machines(dcsync_file_lines)  # Filter out machine accounts
+    return dcsync_file_lines, cleartext_creds
+
+
 def calc_duplicate_password_identifier(dcsync):
     password_identifier_key = 0
     password_identifiers = []
@@ -1346,7 +1289,7 @@ def prepare_hashes(l_dcsync_filename, l_file_prefix):
     machine_count = 0
     ntlm_hashes = []
 
-    dcsync_lines = open_dcsync_file(l_dcsync_filename)
+    dcsync_lines = open_file(l_dcsync_filename)
     dcsync_lines, cleartext_hashes = filter_cleartext(dcsync_lines)
     dcsync_lines = filter_nonntlm(dcsync_lines)
     dcsync_lines = filter_machines(dcsync_lines)
@@ -1407,9 +1350,9 @@ def parse_students(dcsync, students_filename):
     return dcsync
 
 
-def neo4j_query(query_string, neo4j_URI, neo4j_username, neo4j_password):
+def neo4j_query(query_string):
     try:
-        with GraphDatabase.driver(neo4j_URI, auth=(neo4j_username, neo4j_password)) as driver:
+        with GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USERNAME, NEO4J_PASSWORD)) as driver:
             session = driver.session()
             results = session.run(query_string)
             users = []
@@ -1426,9 +1369,9 @@ def neo4j_query(query_string, neo4j_URI, neo4j_username, neo4j_password):
         return []
 
 
-def testNeo4jConnectivity(neo4j_URI, neo4j_username, neo4j_password):
+def testNeo4jConnectivity():
     try:
-        with GraphDatabase.driver(neo4j_URI, auth=(neo4j_username, neo4j_password)) as driver:
+        with GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USERNAME, NEO4J_PASSWORD)) as driver:
             driver.verify_connectivity()
             print("Successfully connected to Neo4j database")
             return True
@@ -1438,7 +1381,7 @@ def testNeo4jConnectivity(neo4j_URI, neo4j_username, neo4j_password):
         return False
 
 
-def retrieve_cred_stuffing_results(cred_stuffing_domains, neo4j_URI, neo4j_username, neo4j_password):
+def retrieve_cred_stuffing_results(cred_stuffing_domains):
     # Checks to see if BreachCreds.py is available, and if so, it will search DeHashed for credential stuffing accounts
     try:
         import BreachCreds
@@ -1465,10 +1408,10 @@ def retrieve_cred_stuffing_results(cred_stuffing_domains, neo4j_URI, neo4j_usern
         else:
             print("No DeHashed results returned for credential stuffing checks")
             return []
-    elif neo4j_password:
+    elif NEO4J_PASSWORD:
         # If a Neo4j password was specified, use that
         try:
-            with GraphDatabase.driver(neo4j_URI, auth=(neo4j_username, neo4j_password)) as driver:
+            with GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USERNAME, NEO4J_PASSWORD)) as driver:
                 session = driver.session()
                 results = session.run("MATCH (u:User) WHERE u.email IS NOT NULL RETURN distinct(split(u.email, '@')[1]) as DOMAIN")
                 domains = []
@@ -1508,6 +1451,22 @@ def retrieve_cred_stuffing_results(cred_stuffing_domains, neo4j_URI, neo4j_usern
     # If DeHashed results returned, write the DeHashed results to a file
     if cred_stuffing_accounts:
         write_dehashed_file(cred_stuffing_accounts)
+
+    return cred_stuffing_accounts
+
+
+def get_cred_stuffing(cred_stuffing_filename, cred_stuffing_domains):
+    if cred_stuffing_filename:
+        cred_stuffing_accounts = open_file(cred_stuffing_filename)
+    elif os.path.isfile("passinspector_dehashed_results.txt"):
+        cred_stuffing_accounts = import_dehashed_file()
+    elif cred_stuffing_domains or NEO4J_PASSWORD:
+        # If a credential_stuffing domain is provided, search with DeHashed
+        # If a password for Neo4j was provided, it will try to pull the email domain from AD
+        # MATCH (u:User) WHERE u.email IS NOT NULL RETURN distinct(split(u.email, '@')[1]) as DOMAIN
+        cred_stuffing_accounts = retrieve_cred_stuffing_results(cred_stuffing_domains)
+    else:
+        cred_stuffing_accounts = []
 
     return cred_stuffing_accounts
 
@@ -1597,6 +1556,28 @@ def find_file(include=None, exclude=None):
         if complete_match == 0:
             return file_name
 
+
+def get_filenames(file_datetime, dcsync_filename, passwords_filename):
+    if not file_datetime:
+        file_datetime = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    if not dcsync_filename:
+        dcsync_filename = find_file([file_datetime, "dcsync"])
+        if dcsync_filename:
+            print(f"No DCSync file was provided, but a DCSync file was found: {dcsync_filename}")
+        else:
+            print("ERROR: No DCSync file provided or located automatically. Cannot continue!")
+            exit()
+    if not passwords_filename:
+        passwords_filename = find_file([file_datetime, "cracked"], ['allcracked'])
+        if passwords_filename:
+            print(f"No cracked file was provided, but a cracked file was found: {passwords_filename}")
+        else:
+            print("ERROR: No cracked file file provided or located automatically. Cannot continue!")
+            exit()
+
+    return file_datetime, dcsync_filename, passwords_filename
+
+
 def list_files_recursive(directory='.'):
     import os
     files_list = []
@@ -1607,7 +1588,7 @@ def list_files_recursive(directory='.'):
 
 
 if __name__ == '__main__':
-    script_version = 2.3
+    script_version = 2.4
     print("\n==============================")
     print("PassInspector  -  Version", script_version)
     print("==============================\n")
@@ -1697,7 +1678,8 @@ if __name__ == '__main__':
 
     # Handle situation where no arguments were provided.
     if not args.file_prefix and not args.dcsync or not args.file_prefix and not args.passwords:
-        file_prefix = input('No arguments provided for DCSync or cracked password file. What is the file prefix for these files? ')
+        file_prefix = input('No arguments provided for DCSync or cracked password file. '
+                            'What is the file prefix for these files? ')
         file_prefix = file_prefix.strip()
     else:
         file_prefix = args.file_prefix
@@ -1709,7 +1691,6 @@ if __name__ == '__main__':
     spray_passwords_filename = args.spray_passwords
     duplicate_password_identifier = args.duplicate_password_identifier
 
-    global DEBUG_MODE
     if args.debug:
         DEBUG_MODE = True
     else:
@@ -1717,23 +1698,15 @@ if __name__ == '__main__':
 
     # Parse Neo4j arguments if provided
     if args.neo4j_hostname:
-        neo4j_URI = f"neo4j://{args.neo4j_hostname}"
-    else:
-        neo4j_URI = f"neo4j://localhost"
-
+        NEO4J_URI = f"neo4j://{args.neo4j_hostname}"
     if args.neo4j_username:
-        neo4j_username = args.neo4j_username
-    else:
-        neo4j_username = "neo4j"
-
-    if args.neo4j_password:
-        neo4j_password = args.neo4j_password
-    else:
-        neo4j_password = "bloodhoundcommunityedition"
+        NEO4J_USERNAME = args.neo4j_username
+    if args.neo4j_username:
+        NEO4J_PASSWORD = args.neo4j_password
 
     # Test Neo4j connectivity, and if it fails, set the password to blank so the script doesn't try to connect later
-    if not testNeo4jConnectivity(neo4j_URI, neo4j_username, neo4j_password):
-        neo4j_password = ""
+    if not testNeo4jConnectivity():
+        NEO4J_PASSWORD = ""
 
     if args.custom:  # Only parse the custom passwords if they were provided
         search_terms = args.custom.split(',')
@@ -1750,5 +1723,4 @@ if __name__ == '__main__':
 
     central_station(search_terms, args.admins, args.enabled, dcsync_filename, passwords_filename, args.students,
                     spray_users_filename, spray_passwords_filename, args.cred_stuffing, args.cred_stuffing_domains,
-                    args.kerberoastable_users, duplicate_password_identifier, file_prefix, neo4j_URI, neo4j_username,
-                    neo4j_password, args.local_hashes)
+                    args.kerberoastable_users, duplicate_password_identifier, file_prefix, args.local_hashes)
