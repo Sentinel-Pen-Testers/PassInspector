@@ -25,7 +25,7 @@ NEO4J_USERNAME = "neo4j"
 
 def central_station(search_terms, admin_users, enabled_users, dcsync_filename, passwords_filename, students_filename,
                     spray_users_filename, spray_passwords_filename, cred_stuffing_filename, cred_stuffing_domains,
-                    kerberoastable_users, duplicate_password_identifier, file_datetime, local_hash_filename):
+                    kerberoastable_users, duplicate_password_identifier, file_datetime, local_hash_filename, search_dehashed):
     # Designed to figure out what actions will need to take place depending on the file types provided
     file_datetime, dcsync_filename, passwords_filename = get_filenames(file_datetime, dcsync_filename, passwords_filename)
     dcsync_results = []  # All results and values
@@ -37,7 +37,7 @@ def central_station(search_terms, admin_users, enabled_users, dcsync_filename, p
     password_file_lines = open_file(passwords_filename)
     password_file_lines = deduplicate_passwords(password_file_lines)
 
-    cred_stuffing_accounts = get_cred_stuffing(cred_stuffing_filename, cred_stuffing_domains)
+    cred_stuffing_accounts = get_cred_stuffing(cred_stuffing_filename, cred_stuffing_domains, search_dehashed)
 
     # Take users from a file, otherwise query neo4j if info was provided, otherwise just assign a blank value
     admin_users = group_lookup("admins", admin_users)
@@ -1455,12 +1455,12 @@ def retrieve_cred_stuffing_results(cred_stuffing_domains):
     return cred_stuffing_accounts
 
 
-def get_cred_stuffing(cred_stuffing_filename, cred_stuffing_domains):
+def get_cred_stuffing(cred_stuffing_filename, cred_stuffing_domains, search_dehashed):
     if cred_stuffing_filename:
         cred_stuffing_accounts = open_file(cred_stuffing_filename)
     elif os.path.isfile("passinspector_dehashed_results.txt"):
         cred_stuffing_accounts = import_dehashed_file()
-    elif cred_stuffing_domains or NEO4J_PASSWORD:
+    elif (cred_stuffing_domains or NEO4J_PASSWORD) and search_dehashed:
         # If a credential_stuffing domain is provided, search with DeHashed
         # If a password for Neo4j was provided, it will try to pull the email domain from AD
         # MATCH (u:User) WHERE u.email IS NOT NULL RETURN distinct(split(u.email, '@')[1]) as DOMAIN
@@ -1645,6 +1645,8 @@ if __name__ == '__main__':
                                                       'script will determine if any of the domain accounts reuse local'
                                                       'account passwords.')
 
+    parser.add_argument('-nd', '--no-dehashed', action='store_true', help='(OPTIONAL) Skip DeHashed search')
+
     parser.add_argument('-nh', '--neo4j-hostname', help='(OPTIONAL) Neo4j hostname or IP (Default: localhost)')
 
     parser.add_argument('-nu', '--neo4j-username', help='(OPTIONAL) Neo4j username for automatic queries '
@@ -1691,6 +1693,11 @@ if __name__ == '__main__':
     spray_passwords_filename = args.spray_passwords
     duplicate_password_identifier = args.duplicate_password_identifier
 
+    if args.no_dehashed:
+        search_dehashed = False
+    else:
+        search_dehashed = True
+
     if args.debug:
         DEBUG_MODE = True
     else:
@@ -1723,4 +1730,4 @@ if __name__ == '__main__':
 
     central_station(search_terms, args.admins, args.enabled, dcsync_filename, passwords_filename, args.students,
                     spray_users_filename, spray_passwords_filename, args.cred_stuffing, args.cred_stuffing_domains,
-                    args.kerberoastable_users, duplicate_password_identifier, file_prefix, args.local_hashes)
+                    args.kerberoastable_users, duplicate_password_identifier, file_prefix, args.local_hashes, search_dehashed)
