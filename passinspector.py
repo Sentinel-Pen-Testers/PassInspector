@@ -1602,7 +1602,7 @@ def list_files_recursive(directory='.'):
 
 
 if __name__ == '__main__':
-    script_version = 2.4
+    script_version = 2.5
     print("\n==============================")
     print("PassInspector  -  Version", script_version)
     print("==============================\n")
