@@ -461,7 +461,7 @@ def create_user_database(dcsync_file_lines, cleartext_creds, admin_users, enable
         is_admin = check_if_admin(username, domain, admin_users)
         kerberoastable = check_if_kerberoastable(username, domain, kerberoastable_users)
         local_pass_repeat = 0
-        student = false
+        student = False
 
         # Create a User object and add it to the database
         user_database.append(
