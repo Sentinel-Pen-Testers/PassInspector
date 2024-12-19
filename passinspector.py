@@ -22,6 +22,24 @@ NEO4J_QUERIES = {"admins": "MATCH (u:User)-[:MemberOf]->(g:Group) WHERE toUpper(
 NEO4J_URI = f"neo4j://localhost"
 NEO4J_USERNAME = "neo4j"
 
+class User:
+    def __init__(self, domain, username, lmhash, nthash, password, cracked, has_lm,
+                 blank_password, enabled, is_admin, kerberoastable, student, local_pass_repeat):
+        self.domain = domain
+        self.username = username
+        self.lmhash = lmhash
+        self.nthash = nthash
+        self.password = password
+        self.cracked = cracked
+        self.has_lm = has_lm
+        self.blank_password = blank_password
+        self.enabled = enabled
+        self.is_admin = is_admin
+        self.kerberoastable = kerberoastable
+        self.student = student
+        self.local_pass_repeat = local_pass_repeat
+
+
 
 def central_station(search_terms, admin_users, enabled_users, dcsync_filename, passwords_filename, students_filename,
                     spray_users_filename, spray_passwords_filename, cred_stuffing_filename, cred_stuffing_domains,
@@ -29,7 +47,7 @@ def central_station(search_terms, admin_users, enabled_users, dcsync_filename, p
     # Designed to figure out what actions will need to take place depending on the file types provided
     file_datetime, dcsync_filename, passwords_filename = get_filenames(file_datetime, dcsync_filename, passwords_filename)
     dcsync_results = []  # All results and values
-    dcsync_results_cracked = []  # Values for any cracked user credential
+    user_database_cracked = []  # Values for any cracked user credential
 
     dcsync_file_lines = open_file(dcsync_filename)
     dcsync_file_lines, cleartext_creds = filter_dcsync_file(dcsync_file_lines)
@@ -49,47 +67,49 @@ def central_station(search_terms, admin_users, enabled_users, dcsync_filename, p
                                                                                         enabled_users,
                                                                                         kerberoastable_users)
 
-    print("Parsing results")
-    for line in dcsync_file_lines:
-        result = parse_dcsync_line(line, password_file_lines, admin_users, enabled_users, kerberoastable_users)
-        if result:
-            dcsync_results.append(result)  # Add the DCSync line to the DCSync array
+    # Create a list of User (see User class) objects
+    user_database = create_user_database(dcsync_file_lines, cleartext_creds, admin_users, enabled_users,
+                                         kerberoastable_users, password_file_lines)
 
-    dcsync_results = fix_bad_passwords(dcsync_results)
-    dcsync_results = add_cleartext_creds(dcsync_results, cleartext_creds)
-    dcsync_results = parse_students(dcsync_results, students_filename)
-    dcsync_results = parse_local_hashes(dcsync_results, local_hash_filename)
+    user_database = fix_bad_passwords(user_database)
+    if cleartext_creds:
+        user_database = add_cleartext_creds(user_database, cleartext_creds)
+    if students_filename:
+        user_database = parse_students(user_database, students_filename)
+    if local_hash_filename:
+        user_database = parse_local_hashes(user_database, local_hash_filename)
 
-    for record in dcsync_results:
-        if record['CRACKED']:
-            dcsync_results_cracked.append(record)
+    for user in user_database:
+        if user.cracked:
+            user_database_cracked.append(user)
 
     print("Calculating statistics")
-    stat_shortest, stat_longest, result_shortest_passwords, result_longest_passwords = calculate_password_long_short(
-        dcsync_results)
+    #stat_shortest, stat_longest, result_shortest_passwords, result_longest_passwords = calculate_password_long_short(
+    #    user_database)
+    stat_enabled_shortest, stat_enabled_longest, result_enabled_shortest_passwords, result_enabled_longest_passwords, stat_all_shortest, stat_all_longest, result_all_shortest_passwords, result_all_longest_passwords = calculate_password_long_short(user_database)
     (text_blank_passwords, text_terms, text_seasons, text_keyboard_walks, text_custom_search, result_blank_passwords,
      result_common_terms, result_seasons, result_keyboard_walks, result_custom_search) = perform_password_search(
-        dcsync_results_cracked, search_terms)
-    text_username_passwords, result_username_passwords = username_password_search(dcsync_results_cracked)
-    text_admin_pass_reuse, results_admin_pass_reuse = admin_password_inspection(dcsync_results, admin_users)
-    text_lm_hashes, result_lm_hash_users = lm_hash_inspection(dcsync_results)
-    text_blank_passwords, result_blank_enabled = blank_enabled_search(dcsync_results, text_blank_passwords) # Updates the blank password text with enabled account count
+        user_database_cracked, search_terms)
+    text_username_passwords, result_username_passwords = username_password_search(user_database_cracked)
+    text_admin_pass_reuse, results_admin_pass_reuse = admin_password_inspection(user_database)
+    text_lm_hashes, result_lm_hash_users = lm_hash_inspection(user_database)
+    text_blank_passwords, result_blank_enabled = blank_enabled_search(user_database, text_blank_passwords) # Updates the blank password text with enabled account count
     text_cred_stuffing, result_cred_stuffing = cred_stuffing_check(cred_stuffing_accounts, dcsync_results)
-    dcsync_results, num_spray_matches, num_pass_spray_matches = check_if_spray(dcsync_results, spray_users_filename,
+    user_database, num_spray_matches, num_pass_spray_matches = check_if_spray(user_database, spray_users_filename,
                                                                                spray_passwords_filename)
-    dcsync_results = count_pass_repeat(dcsync_results)
+    user_database = count_pass_repeat(user_database)
     if duplicate_password_identifier:
-        dcsync_results = calc_duplicate_password_identifier(dcsync_results)
+        user_database = calc_duplicate_password_identifier(user_database)
 
-    printed_stats = show_results(stat_shortest, stat_longest, text_blank_passwords, text_terms, text_seasons, text_keyboard_walks,
+    printed_stats = show_results(stat_enabled_shortest, stat_enabled_longest, stat_all_shortest, stat_all_longest, text_blank_passwords, text_terms, text_seasons, text_keyboard_walks,
                  text_custom_search, text_username_passwords, text_admin_pass_reuse, text_lm_hashes, text_cred_stuffing, num_spray_matches,
-                 num_pass_spray_matches, dcsync_results)
+                 num_pass_spray_matches, user_database)
 
     print("Writing out files")
-    write_cracked_file(printed_stats, file_datetime, dcsync_results, result_shortest_passwords, result_longest_passwords,
+    write_cracked_file(printed_stats, file_datetime, user_database, result_enabled_shortest_passwords, result_enabled_longest_passwords, result_all_shortest_passwords, result_all_longest_passwords,
                        result_blank_passwords, result_common_terms, result_seasons, result_keyboard_walks,
                        result_custom_search, result_username_passwords, results_admin_pass_reuse, result_lm_hash_users, result_blank_enabled, result_cred_stuffing)
-    write_xlsx(file_datetime, dcsync_results)
+    write_xlsx(file_datetime, user_database)
     print("Done!")
 
 
@@ -110,15 +130,15 @@ def group_lookup(query, group_filename):
     return group
 
 
-def fix_bad_passwords(dcsync_results):
-    i = 0
-    while i < len(dcsync_results):
-        if '$HEX[' in dcsync_results[i]["PASSWORD"]:
-            dcsync_results[i]["password"] = dehexify(dcsync_results[i]["password"])
+def fix_bad_passwords(user_database):
+    for user in user_database:
+        if '$HEX[' in user.password:
+            try:
+                user.password = dehexify(user.password)
+            except Exception as e:
+                print(f"Failed to dehexify password for {user.username} with password {user.password}: {e}")
 
-        i += 1
-
-    return dcsync_results
+    return user_database
 
 
 def open_file(l_filename):
@@ -135,60 +155,41 @@ def open_file(l_filename):
     return lines
 
 
-def check_if_spray(l_dcsync_results, l_spray_users_filename, l_spray_passwords_filename):
-    l_num_spray_matches = 0
-    l_num_pass_spray_matches = 0
+def check_if_spray(user_database, spray_users_filename, spray_passwords_filename):
+    num_spray_matches = 0
+    num_pass_spray_matches = 0
 
     # Return default values if no spray files have been provided
-    if not l_spray_users_filename and not l_spray_passwords_filename:
-        return l_dcsync_results, 123456, 123456  # Tells the printing function not to print these stats
+    if not spray_users_filename and not spray_passwords_filename:
+        return user_database, 123456, 123456  # Tells the printing function not to print these stats
 
-    # Check for username match
-    if l_spray_users_filename:
-        spray_users = file_to_userlist(l_spray_users_filename)
-
-        i = 0
-        while i < len(l_dcsync_results):
-            for user_to_compare in spray_users:
-                if l_dcsync_results[i]['USERNAME'].lower() == user_to_compare['USERNAME'].lower():
-                    l_dcsync_results[i]['SPRAY USERNAME'] = True
-                    i += 1
-                    continue
-            l_dcsync_results[i]['SPRAY USERNAME'] = False
-            i += 1
+    # Check for username matches
+    if spray_users_filename:
+        spray_users = file_to_userlist(spray_users_filename)
+        for user in user_database:
+            user.spray_username = any(
+                spray_user['USERNAME'].lower() == user.username.lower() for spray_user in spray_users
+            )
 
     # Check for password matches
-    if l_spray_passwords_filename:
-        spray_passwords = []
-        with open(l_spray_passwords_filename, 'r') as passwords_file:
-            for password in passwords_file:
-                password = password.rstrip()  # Get rid of the newline
-                spray_passwords.append(password)
+    if spray_passwords_filename:
+        with open(spray_passwords_filename, 'r') as passwords_file:
+            spray_passwords = [password.strip() for password in passwords_file]
 
-        i = 0
-        while i < len(l_dcsync_results):
-            for pass_to_compare in spray_passwords:
-                if l_dcsync_results[i]['PASSWORD'].lower() == pass_to_compare:
-                    l_dcsync_results[i]['SPRAY PASSWORD'] = True
-                    i += 1
-                    continue
-            l_dcsync_results[i]['SPRAY PASSWORD'] = False
-            i += 1
+        for user in user_database:
+            user.spray_password = user.password and user.password.lower() in spray_passwords
 
     # Calculate number of matches
-    for entry in l_dcsync_results:
-        username = entry.get('SPRAY USERNAME')  # It's ineffecient to have these in memory, but avoids having to catch
-        password = entry.get('SPRAY PASSWORD')  # an error if these values don't exist
-        enabled = entry.get('ENABLED')
-        if username and password and enabled:
-            l_num_spray_matches += 1
-        if password and enabled:
-            l_num_pass_spray_matches += 1
+    for user in user_database:
+        if getattr(user, 'spray_username', False) and getattr(user, 'spray_password', False) and user.enabled:
+            num_spray_matches += 1
+        if getattr(user, 'spray_password', False) and user.enabled:
+            num_pass_spray_matches += 1
 
-    return l_dcsync_results, l_num_spray_matches, l_num_pass_spray_matches
+    return user_database, num_spray_matches, num_pass_spray_matches
 
 
-def write_xlsx(file_date, database):
+def write_xlsx(file_date, user_database):
     out_filename = f"passinspector_results_{file_date}.xlsx"
     print(f"Writing results in Excel format to {out_filename}")
     # Create Workbook
@@ -198,53 +199,34 @@ def write_xlsx(file_date, database):
     cell_format.set_text_wrap()
     cell_format.set_align('top')
     cell_format.set_align('left')
-    # cell_format.set_font_name('Barlow')  # If we pasted data into the report, this would help.
     cell_format.set_font_size('10')
     header_format = workbook.add_format()
     header_format.set_align('top')
     header_format.set_align('left')
-    header_format.set_font_name('Barlow')
     header_format.set_font_size('11')
     header_format.set_bg_color('#D9D9D9')
 
     worksheet.set_column('C:D', None, None, {'hidden': True})
 
-    # Write Headers
-    col_count = 0
-    for key in database[0]:
-        worksheet.write(0, col_count, key, header_format)
-        col_count += 1
-    worksheet.write(0, col_count, "PASS LENGTH", header_format)  # Add Pass Length Header
-
-    # Hide any columns that don't have valid entries
-    col_count = 0
-    for key in database[0]:
-        key_found = False
-        for entry in database[1:]:
-            if entry[key]:
-                key_found = True
-        if not key_found:
-            col_letter = chr(ord('A') + col_count)
-            worksheet.set_column(f"{col_letter}:{col_letter}", None, None, {'hidden': True})
-        col_count += 1
+    # Define headers based on user object attributes
+    headers = ["DOMAIN", "USERNAME", "PASSWORD", "ENABLED", "IS_ADMIN", "STUDENT", "PASS LENGTH"]
+    for col_count, header in enumerate(headers):
+        worksheet.write(0, col_count, header, header_format)
 
     worksheet.freeze_panes(1, 0)  # Freeze the top row
 
-    # Write output to file
-    row_count = 0
-    while row_count < len(database):
-        col_count = 0
-        for value in database[row_count].values():
-            worksheet.write((row_count + 1), col_count, value, cell_format)
-            col_count += 1
-        # Add length of password
-        if len(database[row_count]['PASSWORD']):
-            worksheet.write((row_count + 1), col_count, len(database[row_count]['PASSWORD']), cell_format)
-        row_count += 1
-    worksheet.autofilter('A1:Z1')  # Allow the headers to be filtered
-    worksheet.autofit()  # Autofit the columns
-    workbook.close()
+    # Write user data to file
+    for row_count, user in enumerate(user_database, start=1):
+        worksheet.write(row_count, 0, user.domain, cell_format)
+        worksheet.write(row_count, 1, user.username, cell_format)
+        worksheet.write(row_count, 2, user.password if user.password else "", cell_format)
+        worksheet.write(row_count, 3, "Yes" if user.enabled else "No", cell_format)
+        worksheet.write(row_count, 4, "Yes" if user.is_admin else "No", cell_format)
+        worksheet.write(row_count, 5, "Yes" if user.student else "No", cell_format)
+        worksheet.write(row_count, 6, len(user.password) if user.password else 0, cell_format)
 
+    worksheet.autofilter(0, 0, len(user_database), len(headers) - 1)  # Allow the headers to be filtered
+    workbook.close()
 
 def read_json_file(file_path):
     try:
@@ -285,8 +267,8 @@ def check_if_kerberoastable(user, domain, krb_users):
 
 
 def check_domains(dcsync_file_lines, admin_users, enabled_users, kerberoastable_users):
-    dcsync_domains = set() # Domain(s) from the DCSync
-    imported_domains = set() # Domain(s) from Neo4j or provided files for admin and enabled users
+    dcsync_domains = set()  # Domain(s) from the DCSync
+    imported_domains = set()  # Domain(s) from Neo4j or provided files for admin and enabled users
     unique_domains_imported = set()
     unique_domains_dcsync = set()
 
@@ -458,64 +440,55 @@ def replace_dcsync_domain(old_domain, new_domain, dcsync_file_lines):
 
     return dcsync_file_lines
 
-def parse_dcsync_line(line, password_file_lines, admin_users, enabled_users, kerberoastable_users):
-    # Used to parse lines from DCSync file into different variables. The structure of the data will be:
-    # DOMAIN: string
-    # USERNAME: string
-    # LMHASH: string
-    # NTHASH: string
-    # PASSWORD: string
-    # CRACKED: boolean
-    # HAS_LM: boolean
-    # BLANK_PASSWORD: boolean
-    # ENABLED: boolean
-    # IS_ADMIN: boolean
-    # KERBEROASTABLE: boolean
-    # STUDENT: boolean
-    # LOCAL_PASS_REPEAT: integer
+def create_user_database(dcsync_file_lines, cleartext_creds, admin_users, enabled_users, kerberoastable_users, password_file_lines):
+    user_database = []
 
-    try:
-        parts = line.split(':')
-        lm_hash, nt_hash = parts[2], parts[3]
-        domain_user_combined = parts[0].split('\\', 1)
-    except IndexError:
-        return None
-    # If there is a domain specified, assign the user and domain. Otherwise, assign the value to the user set the
-    # domain property as blank
-    if len(domain_user_combined) == 2:
-        domain, user = domain_user_combined
-    else:
-        domain, user = "", domain_user_combined[0]
-    # Check if the LM hash represents an actual password
-    if "aad3b435b51404eeaad3b435b51404ee" in lm_hash:
-        has_lm = False  # LM hash is NULL
-    else:
-        has_lm = True  # LM hash represents an actual password
-    # Check if the NT hash represents an actual password
-    if "31d6cfe0d16ae931b73c59d7e0c089c0" in nt_hash:
-        blank_password = True  # NT hash is NULL
-    else:
-        blank_password = False  # NT hash represents an actual password
-    password, cracked = check_if_cracked(nt_hash, password_file_lines)
-    enabled = check_if_enabled(user, domain, enabled_users)
-    is_admin = check_if_admin(user, domain, admin_users)
-    is_krb = check_if_kerberoastable(user, domain, kerberoastable_users)
+    for line in dcsync_file_lines:
+        # Split the line into its components (assuming the format: DOMAIN\USERNAME:RID:LMHASH:NTHASH:::)
+        try:
+            domain_user, rid, lmhash, nthash, *_ = line.split(':')  # Extract and discard RID
+            domain, username = domain_user.split('\\')
+        except ValueError:
+            # Handle improperly formatted lines
+            print(f"Skipping processing for invalid line in dcsync. Likely no domain or other format issue: {line}")
+            continue
 
-    return {
-        'DOMAIN': domain,
-        'USERNAME': user,
-        'LMHASH': lm_hash,
-        'NTHASH': nt_hash,
-        'PASSWORD': password,
-        'CRACKED': cracked,
-        'HAS_LM': has_lm,
-        'BLANK_PASSWORD': blank_password,
-        'ENABLED': enabled,
-        'IS_ADMIN': is_admin,
-        'KERBEROASTABLE': is_krb,
-        'STUDENT': False,
-        'LOCAL_PASS_REPEAT': 0
-    }
+        # Determine derived attributes
+        has_lm = lmhash != "aad3b435b51404eeaad3b435b51404ee"  # Default empty LM hash
+        blank_password = nthash == "31d6cfe0d16ae931b73c59d7e0c089c0"  # Default NT hash for blank password
+        password, cracked = check_if_cracked(nthash, password_file_lines)
+        enabled = check_if_enabled(username, domain, enabled_users)
+        is_admin = check_if_admin(username, domain, admin_users)
+        kerberoastable = check_if_kerberoastable(username, domain, kerberoastable_users)
+        local_pass_repeat = 0
+        student = false
+
+        # Create a User object and add it to the database
+        user_database.append(
+            User(
+                domain=domain,
+                username=username,
+                lmhash=lmhash,
+                nthash=nthash,
+                password=password,
+                cracked=cracked,
+                has_lm=has_lm,
+                blank_password=blank_password,
+                enabled=enabled,
+                is_admin=is_admin,
+                kerberoastable=kerberoastable,
+                student=student,
+                local_pass_repeat=local_pass_repeat,
+            )
+        )
+
+    # DEBUG
+    #print("PRINTING DATABASE")
+    #for user in user_database:
+    #    print(f"{user.domain}\\{user.username} - Admin: {user.is_admin}, Cracked: {user.cracked}")
+    #exit()
+
+    return user_database
 
 
 def deduplicate_passwords(password_file_lines):
@@ -596,23 +569,16 @@ def check_if_admin(user, domain, admin_users):
 
 
 def calculate_password_long_short(user_database):
-    shortest_length = 1000000  # High starting value, so it can be used to initially compare
-    longest_length = 0  # Low starting value, so it can be used to initially compare
-    shortest_passwords = set()
-    longest_passwords = set()
+    def find_password_lengths(users):
+        shortest_length = float('inf')  # Start with infinity for shortest length
+        longest_length = 0  # Start with 0 for longest length
+        shortest_passwords = []
+        longest_passwords = []
 
-    unique_users = set()
-
-    for user in user_database:
-        user_key = (user['DOMAIN'], user['USERNAME'])
-        if user_key not in unique_users:
-            unique_users.add(user_key)
-            # Get rid of disabled users
-            if not user['ENABLED']:
-                continue
-            password = user['PASSWORD']
-            length = len(password)
-            if length > 0:  # Don't count blank passwords
+        for user in users:
+            password = user.password
+            if password and len(password) > 0:  # Skip blank passwords
+                length = len(password)
                 if length < shortest_length:
                     shortest_length = length
                     shortest_passwords = [password]
@@ -624,176 +590,257 @@ def calculate_password_long_short(user_database):
                     longest_passwords = [password]
                 elif length == longest_length:
                     longest_passwords.append(password)
-    return shortest_length, longest_length, shortest_passwords, longest_passwords
+
+        return shortest_length, longest_length, shortest_passwords, longest_passwords
+
+    # Separate enabled and all users
+    enabled_users = [user for user in user_database if user.enabled]
+    all_users = user_database
+
+    # Calculate for enabled users
+    enabled_shortest, enabled_longest, enabled_shortest_passwords, enabled_longest_passwords = find_password_lengths(enabled_users)
+
+    # Calculate for all users
+    all_shortest, all_longest, all_shortest_passwords, all_longest_passwords = find_password_lengths(all_users)
+
+    return enabled_shortest, enabled_longest, enabled_shortest_passwords, enabled_longest_passwords, all_shortest, all_longest, all_shortest_passwords, all_longest_passwords
 
 
-def perform_password_search(dcsync_results_cracked, search_terms):
+def perform_password_search(user_database_cracked, search_terms):
     common_terms = ["password", "letmein", "welcome", "abc", "qwertz"]
     common_seasons = ["spring", "summer", "fall", "autumn", "winter"]
-    common_keyboard_walks = ["qwerty", "asdf", "qaz", "zxc", "12345", "09876", "jkl", "xcvbn"]
+    common_keyboard_walks = ["qwerty", "asdf", "qaz", "zxc", "12345", "09876", "jkl", "xcvbn", "1q2w3e", "rewq"]
     result_blank_passwords = []
     result_common_terms = []
     result_seasons = []
     result_keyboard_walks = []
     result_custom_search = []
-    stat_blank_passwords = ""
-    stat_terms = ""
-    stat_seasons = ""
-    stat_keyboard_walks = ""
-    stat_custom_search = ""
-    count_blank_passwords = 0
-    count_terms = 0
-    count_seasons = 0
-    count_keyboard_walks = 0
-    count_custom_search = 0
+    stats = {
+        "blank_passwords": "",
+        "terms": "",
+        "seasons": "",
+        "keyboard_walks": "",
+        "custom_search": "",
+    }
+    counts = {
+        "blank_passwords": 0,
+        "terms": 0,
+        "seasons": 0,
+        "keyboard_walks": 0,
+        "custom_search": 0,
+    }
+    enabled_counts = {
+        "terms": 0,
+        "seasons": 0,
+        "keyboard_walks": 0,
+        "custom_search": 0,
+    }
 
-    def inner_search(terms, dcsync_results_cracked):
+    def inner_search(terms, users):
         normal_count = 0
         leet_count = 0
         leet_text = ""
         result_records = []
+
         for term in terms:
-            for record in dcsync_results_cracked:
-                if term.lower() in record['PASSWORD'].lower():
+            for user in users:
+                if term.lower() in user.password.lower():
                     normal_count += 1
-                    result_records.append(record)
+                    result_records.append(user)
             leet_terms = convert_to_leetspeak(term)
             for leet_term in leet_terms:
-                for record in dcsync_results_cracked:
-                    if leet_term.lower() in record['PASSWORD'].lower():
+                for user in users:
+                    if leet_term.lower() in user.password.lower():
                         leet_count += 1
-                        result_records.append(record)
+                        result_records.append(user)
+
         if leet_count > 0:
-            leet_text = " (" + str(leet_count) + " contained leetspeech)"
+            leet_text = f" ({leet_count} contained leetspeech)"
             normal_count += leet_count
+
         return normal_count, leet_text, result_records
 
-    for record in dcsync_results_cracked:
-        if record['NTHASH'] == "31d6cfe0d16ae931b73c59d7e0c089c0":
-            count_blank_passwords += 1
-            result_blank_passwords.append(record)
-    if count_blank_passwords > 0:
-        stat_blank_passwords = (f"There were {str(count_blank_passwords)} account(s) found with blank passwords")
+    # Blank passwords
+    for user in user_database_cracked:
+        if user.nthash == "31d6cfe0d16ae931b73c59d7e0c089c0":
+            counts["blank_passwords"] += 1
+            result_blank_passwords.append(user)
 
-    count_terms, leet_text, result_common_terms = inner_search(common_terms, dcsync_results_cracked)
-    if count_terms > 0:
-        stat_terms = (f"There were {str(count_terms)} password(s) found to contain common terms such as password, "
-                      f"welcome, or letmein{leet_text}")
-    count_seasons, leet_text, result_seasons = inner_search(common_seasons, dcsync_results_cracked)
-    if count_seasons > 0:
-        stat_seasons = (f"There were {str(count_seasons)} password(s) found to contain seasons of the year (Spring, "
-                        f"Summer, Fall, Autumn, Winter){leet_text}")
-    count_keyboard_walks, leet_text, result_keyboard_walks = inner_search(common_keyboard_walks, dcsync_results_cracked)
-    if count_keyboard_walks > 0:
-        stat_keyboard_walks = (f"There were {str(count_keyboard_walks)} password(s) found to keyboard walks, which are "
-                               f"commonly chosen sequential keys on the keyboard such as qwerty, zxc, or asdf "
-                               f"{leet_text}")
-    if len(search_terms) > 0:
+    if counts["blank_passwords"] > 0:
+        stats["blank_passwords"] = f"There were {counts['blank_passwords']} account(s) found with blank passwords"
+
+    # Common terms
+    counts["terms"], leet_text, result_common_terms = inner_search(common_terms, user_database_cracked)
+    enabled_counts["terms"] = sum(1 for user in result_common_terms if user.enabled)
+    if counts["terms"] > 0:
+        stats["terms"] = (f"There were {counts['terms']} password(s) found to contain common terms such as 'password', "
+                          f"'welcome', or 'letmein'{leet_text}. {enabled_counts['terms']} of these belonged to enabled users.")
+
+    # Seasons
+    counts["seasons"], leet_text, result_seasons = inner_search(common_seasons, user_database_cracked)
+    enabled_counts["seasons"] = sum(1 for user in result_seasons if user.enabled)
+    if counts["seasons"] > 0:
+        stats["seasons"] = (f"There were {counts['seasons']} password(s) found to contain seasons of the year "
+                            f"(Spring, Summer, Fall, Autumn, Winter){leet_text}. {enabled_counts['seasons']} of these belonged to enabled users.")
+
+    # Keyboard walks
+    counts["keyboard_walks"], leet_text, result_keyboard_walks = inner_search(common_keyboard_walks, user_database_cracked)
+    enabled_counts["keyboard_walks"] = sum(1 for user in result_keyboard_walks if user.enabled)
+    if counts["keyboard_walks"] > 0:
+        stats["keyboard_walks"] = (f"There were {counts['keyboard_walks']} password(s) found to be keyboard walks, "
+                                   f"such as 'qwerty', 'zxc', or 'asdf'{leet_text}. {enabled_counts['keyboard_walks']} of these belonged to enabled users.")
+
+    # Custom search
+    if search_terms:
         for term in search_terms:
-            count_custom_search, leet_text, result_custom_search = inner_search([term], dcsync_results_cracked)
-            if count_custom_search > 0:
-                stat_custom_search = "There were " + str(
-                    count_custom_search) + " result(s) for the password " + term + leet_text
-        count_custom_search, _, result_custom_search = inner_search(search_terms, dcsync_results_cracked)
+            count, leet_text, results = inner_search([term], user_database_cracked)
+            counts["custom_search"] += count
+            result_custom_search.extend(results)
 
-    # print("DEBUG")
-    # print("stat_blank_passwords: ", stat_blank_passwords)
-    # print("stat_terms: ", stat_terms)
-    # print("stat_seasons: ", stat_seasons)
-    # print("stat_keyboard_walks: ", stat_keyboard_walks)
-    # print("stat_custom_search: ", stat_custom_search)
-    return (stat_blank_passwords, stat_terms, stat_seasons, stat_keyboard_walks, stat_custom_search,
-            result_blank_passwords, result_common_terms, result_seasons, result_keyboard_walks, result_custom_search)
+        enabled_counts["custom_search"] = sum(1 for user in result_custom_search if user.enabled)
+        if counts["custom_search"] > 0:
+            stats["custom_search"] = (f"There were {counts['custom_search']} result(s) for the custom search terms "
+                                      f"{', '.join(search_terms)}{leet_text}. {enabled_counts['custom_search']} of these belonged to enabled users.")
+
+    return (
+        stats["blank_passwords"],
+        stats["terms"],
+        stats["seasons"],
+        stats["keyboard_walks"],
+        stats["custom_search"],
+        result_blank_passwords,
+        result_common_terms,
+        result_seasons,
+        result_keyboard_walks,
+        result_custom_search,
+    )
 
 
-def username_password_search(dcsync_results_cracked):
+def username_password_search(user_database_cracked):
     text_username_passwords = ""
     result_username_passwords = []
     count_username_password = 0
     count_username_password_exact = 0
-    for account in dcsync_results_cracked:
-        username = account['USERNAME'].lower()
-        password = account['PASSWORD'].lower()
-        if username in password or password in username and password:
+    count_enabled_users = 0
+    count_enabled_users_exact = 0
+
+    for user in user_database_cracked:
+        username = user.username.lower()
+        password = user.password.lower() if user.password else ""
+
+        if username in password or password in username:
             count_username_password += 1
-            result_username_passwords.append(account)
+            result_username_passwords.append(user)
+            if user.enabled:
+                count_enabled_users += 1
             if username == password:
                 count_username_password_exact += 1
+                if user.enabled:
+                    count_enabled_users_exact += 1
+
     if count_username_password > 0:
-        text_username_passwords = "There were " + str(
-            count_username_password) + " account(s) using their username as part of their password"
+        text_username_passwords = (f"There were {count_username_password} account(s) using their username as part "
+                                   f"of their password. {count_enabled_users} of these belonged to enabled users.")
         if count_username_password_exact > 0:
-            text_username_passwords = (f"{text_username_passwords}. {str(count_username_password_exact)} of these "
-                                       f"account(s) used their username as their password without any additional "
-                                       f"complexity")
+            text_username_passwords += (f" {count_username_password_exact} of these account(s) used their username "
+                                        f"as their password without any additional complexity, and "
+                                        f"{count_enabled_users_exact} of these belonged to enabled users.")
+
     return text_username_passwords, result_username_passwords
 
 
-def admin_password_inspection(dcsync_results, admins):
-    # This could probably be done much more efficiently by someone more familiar with Python
+def admin_password_inspection(user_database):
     admin_password_matches = []
     text_password_matches = ""
 
-    unique_users = set()
+    # Filter admin and non-admin users
+    admin_users = [user for user in user_database if user.is_admin]
+    non_admin_users = [user for user in user_database if not user.is_admin]
 
-    for record in dcsync_results:
-        if record['USERNAME'] in admins:
-            admin_username = record['USERNAME']
-            admin_hash = record['NTHASH']
-            matching_users = []
-            for user in dcsync_results:
-                user_key = (user['DOMAIN'], user['USERNAME'])
-                if user_key not in unique_users:
-                    unique_users.add(user_key)
-                    # Make sure we don't report matches on the same user:
-                    if user['NTHASH'] == admin_hash and user['USERNAME'] not in admins:
-                        # print("The user ", record['USERNAME'], " shares a password with ", user['USERNAME'])
-                        matching_users.append(user['USERNAME'])
-            if len(matching_users) > 0:
-                admin_password_matches.append(
-                    {'ADMIN_USER': admin_username, 'NTHASH': admin_hash, 'NON_ADMIN_USERS': matching_users})
-    # print(admin_password_matches)
-    if len(admin_password_matches) > 0:
-        text_password_matches = "There were " + str(
-            len(admin_password_matches)) + (" instance(s) of an administrative user sharing a password with a "
-                                            "non-administrative account")
+    enabled_admin_matches = 0
+
+    for admin in admin_users:
+        admin_hash = admin.nthash
+        matching_users = []
+        enabled_matching_users = 0
+
+        for non_admin in non_admin_users:
+            if non_admin.nthash == admin_hash:
+                matching_users.append(non_admin.username)
+                if non_admin.enabled:
+                    enabled_matching_users += 1
+
+        if matching_users:
+            if admin.enabled:
+                enabled_admin_matches += 1
+            admin_password_matches.append({
+                'ADMIN_USER': admin.username,
+                'NTHASH': admin_hash,
+                'NON_ADMIN_USERS': matching_users,
+                'ENABLED_NON_ADMIN_USERS': enabled_matching_users,
+            })
+
+    if admin_password_matches:
+        text_password_matches = (f"There were {len(admin_password_matches)} instance(s) of an administrative user "
+                                 f"sharing a password with non-administrative accounts. "
+                                 f"{enabled_admin_matches} of these administrative accounts were enabled.")
+
     return text_password_matches, admin_password_matches
 
 
-def lm_hash_inspection(dcsync_results):
+def lm_hash_inspection(user_database):
     lm_hash_users = []
     text_results = ""
-    for record in dcsync_results:
-        if record['HAS_LM']:
-            lm_hash_users.append(record)
+    enabled_lm_hash_users = 0
+
+    for user in user_database:
+        if user.has_lm:
+            lm_hash_users.append(user)
+            if user.enabled:
+                enabled_lm_hash_users += 1
+
     if len(lm_hash_users) > 0:
-        text_results = "LM hashes were found to be stored for " + str(len(lm_hash_users)) + " account(s)"
+        text_results = (f"LM hashes were found to be stored for {len(lm_hash_users)} account(s). "
+                        f"{enabled_lm_hash_users} of these accounts are enabled.")
+
     return text_results, lm_hash_users
 
-def blank_enabled_search(dcsync_results, text_blank_passwords):
+def blank_enabled_search(user_database, text_blank_passwords):
     # Returns additional text for the blank password line and user accounts with blank passwords
     blank_enabled_users = []
     text_results = ""
-    for record in dcsync_results:
-        if record['BLANK_PASSWORD'] and record['ENABLED']:
-            blank_enabled_users.append(record)
+
+    for user in user_database:
+        if user.blank_password and user.enabled:
+            blank_enabled_users.append(user)
+
     if len(blank_enabled_users) > 0:
         text_results = f" ({len(blank_enabled_users)} of these accounts were enabled)"
     text_blank_passwords += text_results
+
     return text_blank_passwords, blank_enabled_users
 
-def cred_stuffing_check(cred_stuffing_accounts, dcsync_results):
+def cred_stuffing_check(cred_stuffing_accounts, user_database):
     cred_stuffing_matches = []
     text_results = ""
+    enabled_matches_count = 0
+
     for cred_stuffing_account in cred_stuffing_accounts:
-        for dcsync_account in dcsync_results:
-            if cred_stuffing_account['USERNAME'].lower() == dcsync_account['USERNAME'].lower() and cred_stuffing_account['PASSWORD'] == dcsync_account['PASSWORD']:
+        for user in user_database:
+            if (cred_stuffing_account['USERNAME'].lower() == user.username.lower() and
+                    cred_stuffing_account['PASSWORD'] == user.password):
                 cred_stuffing_matches.append(f"{cred_stuffing_account['USERNAME']}:{cred_stuffing_account['PASSWORD']}")
+                if user.enabled:
+                    enabled_matches_count += 1
+
     if len(cred_stuffing_matches) > 0:
-        text_results = f"There were {len(cred_stuffing_matches)} valid credential stuffing password(s) found to be valid"
+        text_results = (f"There were {len(cred_stuffing_matches)} valid credential stuffing password(s) found to be valid. "
+                        f"{enabled_matches_count} of these accounts were enabled.")
+
     return text_results, cred_stuffing_matches
 
-def average_pass_length(dcsync_results):
+
+def average_pass_length(user_database):
     employee_total = 0
     employee_count = 0
     enabled_total = 0
@@ -801,47 +848,37 @@ def average_pass_length(dcsync_results):
     student_total = 0
     student_count = 0
 
-    for result in dcsync_results:
-        if result['PASSWORD']:  # Ignoring blank and uncracked passwords in calculation
-            if not result['STUDENT']:
-                employee_total += len(result['PASSWORD'])
+    for user in user_database:
+        if user.password:  # Ignoring blank and uncracked passwords in calculation
+            if not user.student:
+                employee_total += len(user.password)
                 employee_count += 1
             else:
-                student_total += len(result['PASSWORD'])
+                student_total += len(user.password)
                 student_count += 1
-            if result['ENABLED'] and not result['STUDENT']:
-                enabled_total += len(result['PASSWORD'])
+            if user.enabled and not user.student:
+                enabled_total += len(user.password)
                 enabled_count += 1
 
-    if employee_count > 0:
-        employee_average = round(employee_total / employee_count, 2)  # Round the average to two decimal points
-    else:
-        employee_average = 0
-
-    if student_count > 0:
-        student_average = round(student_total / student_count, 2)
-    else:
-        student_average = 0
-
-    if enabled_count:
-        enabled_average = round(enabled_total / enabled_count, 2)
-    else:
-        enabled_average = 0
+    employee_average = round(employee_total / employee_count, 2) if employee_count > 0 else 0
+    student_average = round(student_total / student_count, 2) if student_count > 0 else 0
+    enabled_average = round(enabled_total / enabled_count, 2) if enabled_count > 0 else 0
 
     return employee_average, student_average, enabled_average
 
 
-def calc_da_cracked(user_database=None):
+def calc_da_cracked(user_database):
     da_cracked = 0
     da_total = 0
     unique_users = set()
+
     for user in user_database:
-        user_key = (user['DOMAIN'], user['USERNAME'])
+        user_key = (user.domain, user.username)
         if user_key not in unique_users:
             unique_users.add(user_key)
-            if user['IS_ADMIN']:
+            if user.is_admin:
                 da_total += 1
-                if user['CRACKED']:
+                if user.cracked:
                     da_cracked += 1
 
     return da_cracked, da_total
@@ -853,12 +890,12 @@ def calculate_unique_hashes(user_database):
     unique_users = set()
 
     for user in user_database:
-        user_key = (user['DOMAIN'], user['USERNAME'])
+        user_key = (user.domain, user.username)
         if user_key not in unique_users:
             unique_users.add(user_key)
-            if user['NTHASH'] not in unique_hashes:
-                unique_hashes.append(user['NTHASH'])
-                if user['CRACKED']:
+            if user.nthash not in unique_hashes:
+                unique_hashes.append(user.nthash)
+                if user.cracked:
                     cracked_unique_hashes += 1
 
     if unique_hashes:
@@ -881,43 +918,40 @@ def calculate_cracked(user_database):
     unique_users = set()
 
     for user in user_database:
-        user_key = (user['DOMAIN'], user['USERNAME'])
+        user_key = (user.domain, user.username)
         if user_key not in unique_users:
             unique_users.add(user_key)
-            if user['CRACKED']:
+            if user.cracked:
                 all_cracked += 1
 
-            if user['STUDENT'] and user['CRACKED']:
-                student_cracked += 1
+            if user.student:
                 student_total += 1
-            elif user['STUDENT'] and not user['CRACKED']:
-                student_total += 1
-            elif not user['STUDENT'] and user['CRACKED']:
-                employee_cracked += 1
+                if user.cracked:
+                    student_cracked += 1
+            else:
                 employee_total += 1
-            elif not user['STUDENT'] and not user['CRACKED']:
-                employee_total += 1
+                if user.cracked:
+                    employee_cracked += 1
 
-            if user['ENABLED'] and user['CRACKED']:
-                enabled_cracked += 1
+            if user.enabled:
                 enabled_total += 1
-            elif user['ENABLED'] and not user['CRACKED']:
-                enabled_total += 1
+                if user.cracked:
+                    enabled_cracked += 1
 
-    student_crack_percent = f"({round((student_cracked / student_total), 2) * 100}%)" if student_total != 0 else "0%"
-    employee_crack_percent = f"({round((employee_cracked / employee_total), 2) * 100}%)" if employee_total != 0 else "0%"
+    student_crack_percent = f"({(student_cracked / student_total * 100):.2f}%)" if student_total != 0 else "0%"
+    employee_crack_percent = f"({(employee_cracked / employee_total * 100):.2f}%)" if employee_total != 0 else "0%"
     enabled_crack_percent = f"({(enabled_cracked / enabled_total * 100):.2f}%)" if enabled_total != 0 else "0%"
-    all_crack_percent = f"({round(all_cracked / len(user_database), 2) * 100}%)" if len(user_database) != 0 else "0%"
+    all_crack_percent = f"({(all_cracked / len(user_database) * 100):.2f}%)" if len(user_database) != 0 else "0%"
 
     return (employee_cracked, employee_total, employee_crack_percent, student_cracked, student_total,
             student_crack_percent, enabled_cracked, enabled_total, enabled_crack_percent, all_cracked,
             len(user_database), all_crack_percent)
 
 
-def show_results(stat_shortest, stat_longest, text_blank_passwords, text_terms, text_seasons, text_keyboard_walks,
+def show_results(stat_enabled_shortest, stat_enabled_longest, stat_all_shortest, stat_all_longest, text_blank_passwords, text_terms, text_seasons, text_keyboard_walks,
                  text_custom_search, text_username_passwords, text_admin_pass_reuse, text_lm_hashes, text_cred_stuffing, stat_spray_matches,
                  stat_spray_pass_matches, user_database):
-    da_cracked, da_total = calc_da_cracked(user_database=user_database)
+    da_cracked, da_total = calc_da_cracked(user_database)
     stat_total_uniq, uniq_cracked_percent, stat_cracked_uniq = calculate_unique_hashes(user_database)
     avg_pass_len, student_avg_pass_len, enabled_avg_pass_len = average_pass_length(user_database)
     (employee_cracked, employee_total, employee_crack_percent, student_cracked, student_total, student_crack_percent,
@@ -946,8 +980,11 @@ def show_results(stat_shortest, stat_longest, text_blank_passwords, text_terms, 
     results_text += print_and_log(f"Average enabled employee password length: {enabled_avg_pass_len}", results_text)
     if student_avg_pass_len:
         results_text += print_and_log(f"Student average password length: {student_avg_pass_len}", results_text)
-    results_text += print_and_log(f"Shortest password length (not counting blank passwords): {stat_shortest}", results_text)
-    results_text += print_and_log(f"Longest password length: {stat_longest}", results_text)
+    results_text += print_and_log(f"Shortest password length (not counting blank passwords): {stat_all_shortest}", results_text)
+    results_text += print_and_log(f"Shortest password length for an enabled account (not counting blank passwords): {stat_enabled_shortest}",
+                                  results_text)
+    results_text += print_and_log(f"Longest password length: {stat_all_longest}", results_text)
+    results_text += print_and_log(f"Longest password length for an enabled account: {stat_enabled_longest}", results_text)
     results_text += print_and_log(text_blank_passwords, results_text) if text_blank_passwords else ""
     local_pass_repeated = count_local_hash(user_database)
     if local_pass_repeated > 0:
@@ -973,38 +1010,46 @@ def show_results(stat_shortest, stat_longest, text_blank_passwords, text_terms, 
     return results_text
 
 
-def write_cracked_file(printed_stats, file_datetime, dcsync_results, result_shortest_passwords, result_longest_passwords,
+def write_cracked_file(printed_stats, file_datetime, user_database, result_enabled_shortest_passwords, result_enabled_longest_passwords, result_all_shortest_passwords, result_all_longest_passwords,
                        result_blank_passwords, result_common_terms, result_seasons, result_keyboard_walks,
                        result_custom_search, result_username_passwords, results_admin_pass_reuse, result_lm_hash_users, result_blank_enabled, result_cred_stuffing):
     output_filename = f"passinspector_allcracked_{file_datetime}.txt"
     print(f"Writing all cracked passwords to {output_filename}")
     results = ["USERNAME,PASSWORD,ENABLED,ADMIN,STUDENT"]
-    for record in dcsync_results:
-        if record['CRACKED']:
-            result = (f"{record['USERNAME']},{record['PASSWORD']},{record['ENABLED']},{record['IS_ADMIN']},"
-                      f"{record['STUDENT']}")
+    for user in user_database:
+        if user.cracked:
+            result = f"{user.username},{user.password},{user.enabled},{user.is_admin},{user.student}"
             results.append(result)
     with open(output_filename, 'w') as outfile:
         for result in results:
             outfile.write(result + '\n')
 
     output_filename = f"passinspector_results_{file_datetime}.txt"
-    print(f"Writing each of the results {output_filename}")
+    print(f"Writing each of the results to {output_filename}")
     results = []
     results.append("=======================")
     results.append("RESULTS SUMMARY")
     results.append("=======================")
     results.append(printed_stats)
     results.append("=======================")
-    results.append("SHORTEST PASSWORD(S)")
+    results.append("SHORTEST PASSWORD(S) FOR ENABLED ACCOUNTS")
     results.append("=======================")
-    for record in result_shortest_passwords:
+    for record in result_enabled_shortest_passwords:
         results.append(record)
-    results.append("")
     results.append("=======================")
-    results.append("LONGEST PASSWORD(S)")
+    results.append("LONGEST PASSWORD(S) FOR ENABLED ACCOUNTS")
     results.append("=======================")
-    for record in result_longest_passwords:
+    for record in result_enabled_longest_passwords:
+        results.append(record)
+    results.append("=======================")
+    results.append("SHORTEST PASSWORD(S) FOR ALL ACCOUNTS")
+    results.append("=======================")
+    for record in result_all_shortest_passwords:
+        results.append(record)
+    results.append("=======================")
+    results.append("LONGEST PASSWORD(S) FOR ALL ACCOUNTS")
+    results.append("=======================")
+    for record in result_all_longest_passwords:
         results.append(record)
     if result_blank_passwords:
         results.append("")
@@ -1012,25 +1057,21 @@ def write_cracked_file(printed_stats, file_datetime, dcsync_results, result_shor
         results.append("ACCOUNTS WITH BLANK PASSWORDS")
         results.append("=======================")
         for record in result_blank_passwords:
-            results.append(record['USERNAME'])
+            results.append(record.username)
     if result_blank_enabled:
         results.append("")
         results.append("=======================")
         results.append("ENABLED ACCOUNTS WITH BLANK PASSWORDS")
         results.append("=======================")
-        unique_users = set()
         for user in result_blank_enabled:
-            user_key = (user['DOMAIN'], user['USERNAME'])
-            if user_key not in unique_users:
-                unique_users.add(user_key)
-                results.append(user)
+            results.append(user.username)
     if result_common_terms:
         results.append("")
         results.append("=======================")
         results.append("COMMON TERM PASSWORDS")
         results.append("=======================")
         for record in result_common_terms:
-            result = record['USERNAME'] + "," + record['PASSWORD']
+            result = f"{record.username},{record.password}"
             results.append(result)
     if result_seasons:
         results.append("")
@@ -1038,7 +1079,7 @@ def write_cracked_file(printed_stats, file_datetime, dcsync_results, result_shor
         results.append("SEASON PASSWORDS")
         results.append("=======================")
         for record in result_seasons:
-            result = record['USERNAME'] + "," + record['PASSWORD']
+            result = f"{record.username},{record.password}"
             results.append(result)
     if result_keyboard_walks:
         results.append("")
@@ -1046,7 +1087,7 @@ def write_cracked_file(printed_stats, file_datetime, dcsync_results, result_shor
         results.append("KEYBOARD WALK PASSWORDS")
         results.append("=======================")
         for record in result_keyboard_walks:
-            result = record['USERNAME'] + "," + record['PASSWORD']
+            result = f"{record.username},{record.password}"
             results.append(result)
     if result_custom_search:
         results.append("")
@@ -1054,7 +1095,7 @@ def write_cracked_file(printed_stats, file_datetime, dcsync_results, result_shor
         results.append("CUSTOM SEARCH TERM PASSWORDS")
         results.append("=======================")
         for record in result_custom_search:
-            result = record['USERNAME'] + "," + record['PASSWORD']
+            result = f"{record.username},{record.password}"
             results.append(result)
     if result_username_passwords:
         results.append("")
@@ -1062,7 +1103,7 @@ def write_cracked_file(printed_stats, file_datetime, dcsync_results, result_shor
         results.append("USERNAMES AS PASSWORDS")
         results.append("=======================")
         for record in result_username_passwords:
-            result = record['USERNAME'] + "," + record['PASSWORD']
+            result = f"{record.username},{record.password}"
             results.append(result)
     if results_admin_pass_reuse:
         results.append("")
@@ -1070,10 +1111,7 @@ def write_cracked_file(printed_stats, file_datetime, dcsync_results, result_shor
         results.append("ADMIN PASSWORD REUSE")
         results.append("=======================")
         for record in results_admin_pass_reuse:
-            result = "The administrative user " + record['ADMIN_USER'] + " shares a password (NT Hash: " + record[
-                'NTHASH'] + ") with the non-administrative user(s): "
-            for user in record['NON_ADMIN_USERS']:
-                result = result + user + " "
+            result = f"The administrative user {record['ADMIN_USER']} shares a password (NT Hash: {record['NTHASH']}) with the non-administrative user(s): {', '.join(record['NON_ADMIN_USERS'])}"
             results.append(result)
     if result_lm_hash_users:
         results.append("")
@@ -1081,7 +1119,7 @@ def write_cracked_file(printed_stats, file_datetime, dcsync_results, result_shor
         results.append("USERS WITH LM HASHES")
         results.append("=======================")
         for record in result_lm_hash_users:
-            result = record['USERNAME'] + "," + record['LMHASH']
+            result = f"{record.username},{record.lmhash}"
             results.append(result)
     if result_cred_stuffing:
         results.append("")
@@ -1239,48 +1277,39 @@ def filter_dcsync_file(dcsync_file_lines):
     return dcsync_file_lines, cleartext_creds
 
 
-def calc_duplicate_password_identifier(dcsync):
+def calc_duplicate_password_identifier(user_database):
     password_identifier_key = 0
     password_identifiers = []
-    i = 0
-    while i < len(dcsync):
+
+    for user in user_database:
         for password_identifier in password_identifiers:
-            if dcsync[i]['NTHASH'] == password_identifier['NTHASH']:
-                dcsync[i]['PASS_IDENTIFIER'] = password_identifier['PASS_IDENTIFIER']
+            if user.nthash == password_identifier['NTHASH']:
+                user.pass_identifier = password_identifier['PASS_IDENTIFIER']
                 break
-        if 'PASS_IDENTIFIER' not in dcsync[i].keys():
-            password_identifiers.append({'NTHASH': dcsync[i]['NTHASH'], 'PASS_IDENTIFIER': password_identifier_key})
-            dcsync[i]['PASS_IDENTIFIER'] = password_identifier_key
+        else:
+            password_identifiers.append({'NTHASH': user.nthash, 'PASS_IDENTIFIER': password_identifier_key})
+            user.pass_identifier = password_identifier_key
             password_identifier_key += 1
-
-        i += 1
-
-    return dcsync
-
-
-def add_cleartext_creds(user_database, clear_creds):
-    for clear_cred in clear_creds:
-        i = 0
-        while i < len(user_database):
-            if (user_database[i]['DOMAIN'] == clear_cred['Domain'] and
-                    user_database[i]['USERNAME'] == clear_cred['Username']):
-                user_database[i]['PASSWORD'] = clear_cred['Password']
-            i += 1
 
     return user_database
 
 
-def count_pass_repeat(dcsync):
-    i = 0
-    while i < len(dcsync):
-        pass_repeat_count = 0
-        for dcsync_result in dcsync:
-            if dcsync[i]['NTHASH'] == dcsync_result['NTHASH']:
-                pass_repeat_count += 1
-        dcsync[i]['PASS_REPEAT_COUNT'] = pass_repeat_count
-        i += 1
+def add_cleartext_creds(user_database, cleartext_creds):
+    for clear_cred in cleartext_creds:
+        for user in user_database:
+            if user.domain == clear_cred['Domain'] and user.username == clear_cred['Username']:
+                if user.password == "":  # Only overwrite the password if it doesn't exist
+                    user.password = clear_cred['Password']
+                    # We don't mark the password as cracked since it comes from the clear text file
+    return user_database
 
-    return dcsync
+
+def count_pass_repeat(user_database):
+    for user in user_database:
+        pass_repeat_count = sum(1 for other_user in user_database if user.nthash == other_user.nthash)
+        user.local_pass_repeat = pass_repeat_count
+
+    return user_database
 
 
 def prepare_hashes(l_dcsync_filename, l_file_prefix):
@@ -1332,22 +1361,15 @@ def prepare_hashes(l_dcsync_filename, l_file_prefix):
     exit()
 
 
-def parse_students(dcsync, students_filename):
-    if not students_filename:
-        return dcsync
-
+def parse_students(user_database, students_filename):
     print("Parsing students")
-
     students = file_to_userlist(students_filename)
-    i = 0
-    while i < len(dcsync):
+    for user in user_database:
         for student in students:
-            if dcsync[i]['USERNAME'].lower() == student['USERNAME'].lower():
-                dcsync[i]['STUDENT'] = True
+            if user.username.lower() == student['USERNAME'].lower():
+                user.student = True
                 break
-        i += 1
-
-    return dcsync
+    return user_database
 
 
 def neo4j_query(query_string):
@@ -1511,29 +1533,21 @@ def process_hashes(hash_filename):
     return nt_hashes
 
 
-def parse_local_hashes(dcsync, local_hash_filename):
-    if not local_hash_filename:
-        return dcsync
-
+def parse_local_hashes(user_database, local_hash_filename):
     local_hashes = process_hashes(local_hash_filename)
 
-    i = 0
-    while i < len(dcsync):
-        nt_hash = dcsync[i]['NTHASH']
+    for user in user_database:
         for comparison_hash in local_hashes:
-            if comparison_hash == nt_hash:
-                dcsync[i]['LOCAL_PASS_REPEAT'] += 1
-        i += 1
-
-    return dcsync
+            if comparison_hash == user.nthash:
+                user.local_pass_repeat += 1
+    return user_database
 
 
-def count_local_hash(dcsync):
+def count_local_hash(user_database):
     local_hash_count = 0
-    for user in dcsync:
-        if user['LOCAL_PASS_REPEAT'] > 0:
+    for user in user_database:
+        if user.local_pass_repeat > 0:
             local_hash_count += 1
-
     return local_hash_count
 
 def find_file(include=None, exclude=None):
