@@ -630,6 +630,7 @@ def perform_password_search(user_database_cracked, search_terms):
         "custom_search": 0,
     }
     enabled_counts = {
+        "blank_passwords": 0,
         "terms": 0,
         "seasons": 0,
         "keyboard_walks": 0,
@@ -665,9 +666,11 @@ def perform_password_search(user_database_cracked, search_terms):
         if user.nthash == "31d6cfe0d16ae931b73c59d7e0c089c0":
             counts["blank_passwords"] += 1
             result_blank_passwords.append(user)
+            if user.enabled:
+              enabled_counts["blank_passwords"] += 1
 
     if counts["blank_passwords"] > 0:
-        stats["blank_passwords"] = f"There were {counts['blank_passwords']} account(s) found with blank passwords"
+        stats["blank_passwords"] = f"There were {counts['blank_passwords']} account(s) found with blank passwords. {enabled_counts["blank_passwords"]} of these belonged to enabled users."
 
     # Common terms
     counts["terms"], leet_text, result_common_terms = inner_search(common_terms, user_database_cracked)
