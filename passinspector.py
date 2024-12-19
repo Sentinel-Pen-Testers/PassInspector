@@ -670,7 +670,7 @@ def perform_password_search(user_database_cracked, search_terms):
               enabled_counts["blank_passwords"] += 1
 
     if counts["blank_passwords"] > 0:
-        stats["blank_passwords"] = f"There were {counts['blank_passwords']} account(s) found with blank passwords. {enabled_counts["blank_passwords"]} of these belonged to enabled users."
+        stats["blank_passwords"] = f"There were {counts['blank_passwords']} account(s) found with blank passwords. {enabled_counts['blank_passwords']} of these belonged to enabled users."
 
     # Common terms
     counts["terms"], leet_text, result_common_terms = inner_search(common_terms, user_database_cracked)
