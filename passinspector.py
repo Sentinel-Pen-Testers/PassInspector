@@ -460,8 +460,8 @@ def create_user_database(dcsync_file_lines, cleartext_creds, admin_users, enable
         enabled = check_if_enabled(username, domain, enabled_users)
         is_admin = check_if_admin(username, domain, admin_users)
         kerberoastable = check_if_kerberoastable(username, domain, kerberoastable_users)
-        local_pass_repeat = len([u for u in user_database if u.password == password and u.password is not None])
-        student = "student" in username.lower()  # Example logic for detecting students
+        local_pass_repeat = 0
+        student = false
 
         # Create a User object and add it to the database
         user_database.append(
@@ -783,9 +783,7 @@ def admin_password_inspection(user_database):
     if admin_password_matches:
         text_password_matches = (f"There were {len(admin_password_matches)} instance(s) of an administrative user "
                                  f"sharing a password with non-administrative accounts. "
-                                 f"{enabled_admin_matches} of these administrative accounts were enabled. "
-                                 f"In total, {sum(match['ENABLED_NON_ADMIN_USERS'] for match in admin_password_matches)} "
-                                 f"non-administrative accounts were enabled.")
+                                 f"{enabled_admin_matches} of these administrative accounts were enabled.")
 
     return text_password_matches, admin_password_matches
 
