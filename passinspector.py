@@ -112,12 +112,6 @@ def central_station(search_terms, admin_users, enabled_users, dcsync_filename, p
     write_xlsx(file_datetime, user_database)
     print("Done!")
 
-    for user in user_database:
-        print("User:")
-        for attr, value in vars(user).items():
-            print(f"  {attr}: {value}")
-        print("-" * 30)  # Separator for better readability
-
 
 def print_and_log(message, log):
     print(message)
