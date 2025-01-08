@@ -24,7 +24,7 @@ NEO4J_USERNAME = "neo4j"
 
 class User:
     def __init__(self, domain, username, lmhash, nthash, password, cracked, has_lm,
-                 blank_password, enabled, is_admin, kerberoastable, student, local_pass_repeat):
+                 blank_password, enabled, is_admin, kerberoastable, student, local_pass_repeat, pass_repeat):
         self.domain = domain
         self.username = username
         self.lmhash = lmhash
@@ -38,6 +38,7 @@ class User:
         self.kerberoastable = kerberoastable
         self.student = student
         self.local_pass_repeat = local_pass_repeat
+        self.pass_repeat = pass_repeat
 
 
 
@@ -199,34 +200,78 @@ def write_xlsx(file_date, user_database):
     cell_format.set_text_wrap()
     cell_format.set_align('top')
     cell_format.set_align('left')
+    # cell_format.set_font_name('Barlow')  # If we pasted data into the report, this would help.
     cell_format.set_font_size('10')
     header_format = workbook.add_format()
     header_format.set_align('top')
     header_format.set_align('left')
+    header_format.set_font_name('Barlow')
     header_format.set_font_size('11')
     header_format.set_bg_color('#D9D9D9')
 
-    worksheet.set_column('C:D', None, None, {'hidden': True})
+    # Define headers
+    headers = [
+        'DOMAIN', 'USERNAME', 'LMHASH', 'NTHASH', 'PASSWORD', 'CRACKED', 'HAS_LM',
+        'BLANK_PASSWORD', 'ENABLED', 'IS_ADMIN', 'KERBEROASTABLE', 'STUDENT',
+        'LOCAL_PASS_REPEAT', 'PASS_REPEAT_COUNT'
+    ]
+    worksheet.freeze_panes(1, 0)  # Freeze the top row
 
-    # Define headers based on user object attributes
-    headers = ["DOMAIN", "USERNAME", "PASSWORD", "ENABLED", "IS_ADMIN", "STUDENT", "PASS LENGTH"]
+    # Write headers to the first row
     for col_count, header in enumerate(headers):
         worksheet.write(0, col_count, header, header_format)
 
-    worksheet.freeze_panes(1, 0)  # Freeze the top row
+    # Prepare the data for writing and track column widths
+    column_widths = [len(header) for header in headers]
+    data = []
+    hide_columns = {'LMHASH', 'NTHASH'}  # Columns to hide initially
+    conditional_hide_columns = {'ENABLED', 'IS_ADMIN', 'KERBEROASTABLE', 'STUDENT', 'LOCAL_PASS_REPEAT'}
+    conditional_false_counts = {key: 0 for key in conditional_hide_columns}
+    total_rows = len(user_database)
 
-    # Write user data to file
-    for row_count, user in enumerate(user_database, start=1):
-        worksheet.write(row_count, 0, user.domain, cell_format)
-        worksheet.write(row_count, 1, user.username, cell_format)
-        worksheet.write(row_count, 2, user.password if user.password else "", cell_format)
-        worksheet.write(row_count, 3, "Yes" if user.enabled else "No", cell_format)
-        worksheet.write(row_count, 4, "Yes" if user.is_admin else "No", cell_format)
-        worksheet.write(row_count, 5, "Yes" if user.student else "No", cell_format)
-        worksheet.write(row_count, 6, len(user.password) if user.password else 0, cell_format)
+    for user in user_database:
+        values = [
+            user.domain,
+            user.username,
+            user.lmhash,
+            user.nthash,
+            user.password if user.password else "",
+            "True" if user.cracked else "False",
+            "True" if user.has_lm else "False",
+            "True" if user.blank_password else "False",
+            "True" if user.enabled else "False",
+            "True" if user.is_admin else "False",
+            "True" if user.kerberoastable else "False",
+            "True" if user.student else "False",
+            user.local_pass_repeat,
+            getattr(user, "pass_repeat_count", 0)
+        ]
+        data.append(values)
+
+        # Update column widths and count "False" values for conditional columns
+        for col_index, value in enumerate(values):
+            column_widths[col_index] = max(column_widths[col_index], len(str(value)))
+            if headers[col_index] in conditional_hide_columns and value == "False":
+                conditional_false_counts[headers[col_index]] += 1
+
+    # Write data rows
+    for row_index, row in enumerate(data, start=1):
+        for col_index, value in enumerate(row):
+            worksheet.write(row_index, col_index, value, cell_format)
+
+    # Adjust column widths
+    for col_index, width in enumerate(column_widths):
+        worksheet.set_column(col_index, col_index, width)
+
+    # Hide specified columns
+    for col_index, header in enumerate(headers):
+        if header in hide_columns or (header in conditional_hide_columns and conditional_false_counts[header] == total_rows):
+            worksheet.set_column(col_index, col_index, None, None, {'hidden': True})
 
     worksheet.autofilter(0, 0, len(user_database), len(headers) - 1)  # Allow the headers to be filtered
     workbook.close()
+
+
 
 def read_json_file(file_path):
     try:
@@ -461,6 +506,7 @@ def create_user_database(dcsync_file_lines, cleartext_creds, admin_users, enable
         is_admin = check_if_admin(username, domain, admin_users)
         kerberoastable = check_if_kerberoastable(username, domain, kerberoastable_users)
         local_pass_repeat = 0
+        pass_repeat = 0
         student = False
 
         # Create a User object and add it to the database
@@ -479,6 +525,7 @@ def create_user_database(dcsync_file_lines, cleartext_creds, admin_users, enable
                 kerberoastable=kerberoastable,
                 student=student,
                 local_pass_repeat=local_pass_repeat,
+                pass_repeat=pass_repeat
             )
         )
 
@@ -1310,7 +1357,7 @@ def add_cleartext_creds(user_database, cleartext_creds):
 def count_pass_repeat(user_database):
     for user in user_database:
         pass_repeat_count = sum(1 for other_user in user_database if user.nthash == other_user.nthash)
-        user.local_pass_repeat = pass_repeat_count
+        user.pass_repeat = pass_repeat_count
 
     return user_database
 
