@@ -12,13 +12,14 @@ import xlsxwriter
 """This script is created to parse through cracked passwords to find weak patterns that can be added to the report."""
 
 NEO4J_PASSWORD = "bloodhoundcommunityedition"
-NEO4J_QUERIES = {"admins": "MATCH (u:User)-[:MemberOf]->(g:Group) WHERE toUpper(g.name) CONTAINS 'DOMAIN ADMINS' OR "
-                           "g.name CONTAINS 'ENTERPRISE ADMINS' OR g.name STARTS WITH 'ADMINISTRATORS@' RETURN "
-                           "DISTINCT toLower(u.domain) + '\\\\' + toLower(u.samaccountname) AS user",
-                 "enabled": "MATCH (u:User) WHERE u.enabled=true RETURN tolower(u.domain) + '\\\\' + "
-                            "tolower(u.samaccountname) AS user",
-                 "kerberoastable": "MATCH (u:User)WHERE u.hasspn=true RETURN tolower(u.domain) + '\\\\' + "
-                                   "tolower(u.samaccountname) AS user"}
+NEO4J_QUERIES = {
+    "admins": "MATCH (u:User)-[:MemberOf]->(g:Group) WHERE toUpper(g.name) CONTAINS 'DOMAIN ADMINS' OR "
+              "g.name CONTAINS 'ENTERPRISE ADMINS' OR g.name STARTS WITH 'ADMINISTRATORS@' RETURN "
+              "DISTINCT toLower(u.domain) + '\\\\' + toLower(u.samaccountname) AS user",
+    "enabled": "MATCH (u:User) WHERE u.enabled=true RETURN tolower(u.domain) + '\\\\' + "
+               "tolower(u.samaccountname) AS user",
+    "kerberoastable": "MATCH (u:User)WHERE u.hasspn=true RETURN tolower(u.domain) + '\\\\' + "
+                      "tolower(u.samaccountname) AS user"}
 NEO4J_URI = f"neo4j://localhost"
 NEO4J_USERNAME = "neo4j"
 
@@ -1535,6 +1536,7 @@ def count_local_hash(dcsync):
             local_hash_count += 1
 
     return local_hash_count
+
 
 def find_file(include=None, exclude=None):
     # include and exclude should be lists
