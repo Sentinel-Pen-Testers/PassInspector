@@ -131,6 +131,7 @@ Parameter | Description
 -e | (OPTIONAL) A file containing a list of enabled domain users. If specified, it will specify enabled users in the output. The format should be DOMAIN\USERNAME or USERNAME
 -fp | (OPTIONAL) File output prefix (if none is provided, datetime will be used instead.)
 -k | (OPTIONAL) A file containing all of the Kerberoastable users. Overrides automatic Neo4j queries.
+-nd | (OPTIONAL) Skip DeHashed search
 -nh | (OPTIONAL) Neo4j hostname or IP (Default: localhost)
 -nu | (OPTIONAL) Neo4j username for automatic queries (Default: neo4j)
 -np | (OPTIONAL) Neo4j password for automatic queries. Must be specified for automatic queries to be attempted.
