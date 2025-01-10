@@ -244,7 +244,7 @@ def write_xlsx(file_date, user_database):
             "True" if user.kerberoastable else "False",
             "True" if user.student else "False",
             user.local_pass_repeat,
-            getattr(user, "pass_repeat_count", 0)
+            user.pass_repeat
         ]
         data.append(values)
 
