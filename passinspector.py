@@ -374,16 +374,25 @@ def check_domains(dcsync_file_lines, admin_users, enabled_users, kerberoastable_
                 print(f"No changes made for domain {unique_domain}")
 
     if unique_domains_dcsync:
+        neo4j_status = testNeo4jConnectivity()
+
         for unique_domain in unique_domains_dcsync:
             no_match_text = "imported data"
             new_domain = ""
-            try:
-                # If curses exists, use the TUI
-                import curses
-                new_domain = curses.wrapper(domain_change_tui, unique_domain, no_match_text, imported_domains)
-            except ImportError:
-                # If curses is not available, use the CLI
-                new_domain = domain_change_cli(unique_domain, no_match_text, imported_domains)
+
+            if neo4j_status:
+                # Attempt to fix it automatically using Neo4j data if possible
+                new_domain = domain_change_auto(unique_domain, dcsync_file_lines)
+
+            # If it was not able to auto-resolve it, prompt the user
+            if new_domain == "":
+                try:
+                    # If curses exists, use the TUI
+                    import curses
+                    new_domain = curses.wrapper(domain_change_tui, unique_domain, no_match_text, imported_domains)
+                except ImportError:
+                    # If curses is not available, use the CLI
+                    new_domain = domain_change_cli(unique_domain, no_match_text, imported_domains)
 
             if new_domain:
                 old_domain = unique_domain
@@ -472,6 +481,51 @@ def replace_imported_domain(old_domain, new_domain, admin_users, enabled_users, 
             user['DOMAIN'] = new_domain
     return admin_users, enabled_users, kerberoastable_users
 
+def domain_change_auto(old_domain, dcsync_file_lines):
+    # This function checks all users matching a unique domain to see if they appear in Neo4j
+    # a single time. If so, it will auto "fix" them. Otherwise, it'll skip on to allow a
+    # manual adjustment to be made
+
+    # Step 1: Extract all usernames for the unique domain
+    usernames = []
+    for line in dcsync_file_lines:
+        if "\\" in line:
+            domain, rest = line.split("\\", 1)  # Split at the first occurrence of '\'
+            if domain.lower() == old_domain.lower():
+                username = rest.split(":", 1)[0]  # Extract the username before the first ':'
+                usernames.append(username)
+    if DEBUG_MODE:
+        print(f"Found the following users for the {old_domain} domain:")
+        print(usernames)
+
+    if not usernames:
+        print(f"No usernames found for the domain '{old_domain}' in the DCSync file. Something must have gone wrong.")
+        return ""
+
+    # Step 2: Search Neo4j for each username and collect associated domains
+    resolved_domains = set()
+    for username in usernames:
+        query_string = f"MATCH (u:User) WHERE u.name contains toUpper('{username}') RETURN DISTINCT toLower(u.domain) + '\\\\' + toLower(u.samaccountname) AS user"
+        results = neo4j_query(query_string)
+
+        for result in results:
+            resolved_domains.add(result['DOMAIN'].lower())
+            if DEBUG_MODE:
+                print(f"User {username} found in Neo4j with domain of {result['DOMAIN'].lower()}")
+
+    # Step 3: Determine if all results point to the same domain
+    if DEBUG_MODE:
+        print(f"When searching DCSync users with {old_domain} domain, the following domains were found: {resolved_domains}")
+    if len(resolved_domains) == 1:
+        # If there was just one domain returned, it successfully figured out the matching domain automatically
+        resolved_domain = resolved_domains.pop()
+        return resolved_domain
+    elif len(resolved_domains) == 0:
+        print(f"No matching domains found in Neo4j for users under '{old_domain}'.")
+        return ""
+    else:
+        print(f"Failed to automatically resolve domain '{old_domain}'")
+        return ""
 
 def replace_dcsync_domain(old_domain, new_domain, dcsync_file_lines):
     print(f"Updating {old_domain} domain in DCSync to {new_domain}")
