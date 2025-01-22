@@ -198,7 +198,6 @@ def write_xlsx(file_date, user_database):
     workbook = xlsxwriter.Workbook(out_filename)
     worksheet = workbook.add_worksheet()
     cell_format = workbook.add_format()
-    cell_format.set_text_wrap()
     cell_format.set_align('top')
     cell_format.set_align('left')
     # cell_format.set_font_name('Barlow')  # If we pasted data into the report, this would help.
