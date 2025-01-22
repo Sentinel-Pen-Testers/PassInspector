@@ -12,13 +12,14 @@ import xlsxwriter
 """This script is created to parse through cracked passwords to find weak patterns that can be added to the report."""
 
 NEO4J_PASSWORD = "bloodhoundcommunityedition"
-NEO4J_QUERIES = {"admins": "MATCH (u:User)-[:MemberOf]->(g:Group) WHERE toUpper(g.name) CONTAINS 'DOMAIN ADMINS' OR "
-                           "g.name CONTAINS 'ENTERPRISE ADMINS' OR g.name STARTS WITH 'ADMINISTRATORS@' RETURN "
-                           "DISTINCT toLower(u.domain) + '\\\\' + toLower(u.samaccountname) AS user",
-                 "enabled": "MATCH (u:User) WHERE u.enabled=true RETURN tolower(u.domain) + '\\\\' + "
-                            "tolower(u.samaccountname) AS user",
-                 "kerberoastable": "MATCH (u:User)WHERE u.hasspn=true RETURN tolower(u.domain) + '\\\\' + "
-                                   "tolower(u.samaccountname) AS user"}
+NEO4J_QUERIES = {
+    "admins": "MATCH (u:User)-[:MemberOf]->(g:Group) WHERE toUpper(g.name) CONTAINS 'DOMAIN ADMINS' OR "
+              "g.name CONTAINS 'ENTERPRISE ADMINS' OR g.name STARTS WITH 'ADMINISTRATORS@' RETURN "
+              "DISTINCT toLower(u.domain) + '\\\\' + toLower(u.samaccountname) AS user",
+    "enabled": "MATCH (u:User) WHERE u.enabled=true RETURN tolower(u.domain) + '\\\\' + "
+               "tolower(u.samaccountname) AS user",
+    "kerberoastable": "MATCH (u:User)WHERE u.hasspn=true RETURN tolower(u.domain) + '\\\\' + "
+                      "tolower(u.samaccountname) AS user"}
 NEO4J_URI = f"neo4j://localhost"
 NEO4J_USERNAME = "neo4j"
 
@@ -197,7 +198,6 @@ def write_xlsx(file_date, user_database):
     workbook = xlsxwriter.Workbook(out_filename)
     worksheet = workbook.add_worksheet()
     cell_format = workbook.add_format()
-    cell_format.set_text_wrap()
     cell_format.set_align('top')
     cell_format.set_align('left')
     # cell_format.set_font_name('Barlow')  # If we pasted data into the report, this would help.
@@ -1599,6 +1599,7 @@ def count_local_hash(user_database):
         if user.local_pass_repeat > 0:
             local_hash_count += 1
     return local_hash_count
+
 
 def find_file(include=None, exclude=None):
     # include and exclude should be lists
