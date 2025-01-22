@@ -245,7 +245,7 @@ def write_xlsx(file_date, user_database):
             "True" if user.kerberoastable else "False",
             "True" if user.student else "False",
             user.local_pass_repeat,
-            getattr(user, "pass_repeat_count", 0)
+            user.pass_repeat
         ]
         data.append(values)
 
@@ -477,14 +477,14 @@ def replace_imported_domain(old_domain, new_domain, admin_users, enabled_users, 
 def replace_dcsync_domain(old_domain, new_domain, dcsync_file_lines):
     print(f"Updating {old_domain} domain in DCSync to {new_domain}")
 
-    i = 0
-    while i < len(dcsync_file_lines):
-        dcsync_file_lines[i] = dcsync_file_lines[i].split("\\")
-        dcsync_file_lines[i][0] = new_domain
-        dcsync_file_lines[i] = "\\".join(dcsync_file_lines[i])
-        i += 1
+    for i in range(len(dcsync_file_lines)):
+        if "\\" in dcsync_file_lines[i]:
+            domain, rest = dcsync_file_lines[i].split("\\", 1)  # Split only at the first occurrence of '\'
+            if domain.lower() == old_domain.lower():  # Case-insensitive comparison
+                dcsync_file_lines[i] = f"{new_domain}\\{rest}"
 
     return dcsync_file_lines
+
 
 def create_user_database(dcsync_file_lines, cleartext_creds, admin_users, enabled_users, kerberoastable_users, password_file_lines):
     user_database = []
