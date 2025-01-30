@@ -225,11 +225,14 @@ def check_if_spray(user_database, spray_users_filename, spray_passwords_filename
                 user.spray_password = False
 
     # Step 5: Calculate stats
-    for user in externally_found_users:
-        if user.spray_password and user.enabled:
-            num_spray_matches += 1
-        if user.spray_password and user.enabled:
-            num_pass_spray_matches += 1
+    if spray_passwords_filename:
+        for user in externally_found_users:
+            if user.spray_password and user.enabled:
+                num_spray_matches += 1
+            if user.spray_password and user.enabled:
+                num_pass_spray_matches += 1
+    else:
+        print("No spray password file supplied. Cannot calculate stats.")
 
     return user_database, num_spray_matches, num_pass_spray_matches
 
