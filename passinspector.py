@@ -25,7 +25,7 @@ NEO4J_USERNAME = "neo4j"
 
 class User:
     def __init__(self, domain, username, lmhash, nthash, password, cracked, has_lm,
-                 blank_password, enabled, is_admin, kerberoastable, student, local_pass_repeat, pass_repeat, email):
+                 blank_password, enabled, is_admin, kerberoastable, student, local_pass_repeat, pass_repeat, email, spray_user, spray_password):
         self.domain = domain
         self.username = username
         self.lmhash = lmhash
@@ -41,6 +41,8 @@ class User:
         self.local_pass_repeat = local_pass_repeat
         self.pass_repeat = pass_repeat
         self.email = email
+        self.spray_user = False
+        self.spray_password = False
 
 
 
@@ -193,9 +195,11 @@ def check_if_spray(user_database, spray_users_filename, spray_passwords_filename
                 # Match domain if provided
                 if external_user['DOMAIN'] and user.domain.lower() == external_user['DOMAIN'].lower():
                     externally_found_users.append(user)
+                    user.spray_user = True
                     break
                 elif not external_user['DOMAIN']:  # Match username only if DOMAIN is None
                     externally_found_users.append(user)
+                    user.spray_user = True
                     break
 
             # Check if spray_user in "username@domain.com" format matches the email
@@ -203,6 +207,7 @@ def check_if_spray(user_database, spray_users_filename, spray_passwords_filename
                 spray_email = f"{external_user['USERNAME']}@{external_user['DOMAIN']}".lower()
                 if user.email and user.email.lower() == spray_email:
                     externally_found_users.append(user)
+                    user.spray_user = True
                     break
 
     if DEBUG_MODE:
@@ -218,8 +223,8 @@ def check_if_spray(user_database, spray_users_filename, spray_passwords_filename
                 print("DEBUG: Provided spray passwords")
                 print(spray_passwords)
 
-        for user in externally_found_users:
-            if user.password and user.password.lower() in spray_passwords:
+        for user in user_database:
+            if user.spray_user and user.password and user.password.lower() in spray_passwords:
                 user.spray_password = True
             else:
                 user.spray_password = False
@@ -260,7 +265,7 @@ def write_xlsx(file_date, user_database):
     headers = [
         'DOMAIN', 'USERNAME', 'LMHASH', 'NTHASH', 'PASSWORD', 'CRACKED', 'HAS_LM',
         'BLANK_PASSWORD', 'ENABLED', 'IS_ADMIN', 'KERBEROASTABLE', 'STUDENT',
-        'LOCAL_PASS_REPEAT', 'PASS_REPEAT_COUNT'
+        'LOCAL_PASS_REPEAT', 'PASS_REPEAT_COUNT', 'SPRAY_USER', 'SPRAY_PASSWORD'
     ]
     worksheet.freeze_panes(1, 0)  # Freeze the top row
 
@@ -272,7 +277,7 @@ def write_xlsx(file_date, user_database):
     column_widths = [len(header) for header in headers]
     data = []
     hide_columns = {'LMHASH', 'NTHASH'}  # Columns to hide initially
-    conditional_hide_columns = {'ENABLED', 'IS_ADMIN', 'KERBEROASTABLE', 'STUDENT', 'LOCAL_PASS_REPEAT'}
+    conditional_hide_columns = {'ENABLED', 'IS_ADMIN', 'KERBEROASTABLE', 'STUDENT', 'LOCAL_PASS_REPEAT', 'SPRAY_USER', 'SPRAY_PASSWORD'}
     conditional_false_counts = {key: 0 for key in conditional_hide_columns}
     total_rows = len(user_database)
 
@@ -291,7 +296,9 @@ def write_xlsx(file_date, user_database):
             "True" if user.kerberoastable else "False",
             "True" if user.student else "False",
             user.local_pass_repeat,
-            user.pass_repeat
+            user.pass_repeat,
+            user.spray_user,
+            user.spray_password
         ]
         data.append(values)
 
@@ -627,7 +634,9 @@ def create_user_database(dcsync_file_lines, cleartext_creds, admin_users, enable
                 student=student,
                 local_pass_repeat=local_pass_repeat,
                 pass_repeat=pass_repeat,
-                email=None
+                email=None,
+                spray_user=False,
+                spray_password=False
             )
         )
 
