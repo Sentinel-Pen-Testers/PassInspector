@@ -1,43 +1,62 @@
-# Pass Inspector
+## Description 
+PassInspector is built to parse through a list of cracked passwords to identify patterns that could indicate a weak password policy. This script is intended to be used on passwords that have been cracked from the domain's NTDS.dit file using something like a DCSync attack.
 
-## Description
-PassInspector is built to parse through a list of cracked passwords to identify patterns that could show a weak password policy. This script is intended to be used on the passwords that have been cracked from the domain's NTDS.dit file using something like a DCsync attack. If Neo4j credentials are supplied, it will automatically pull enabled users, administrative users (only those within the "Administrators", "Domain Admins", and "Enterprise Admins" groups), and Kerberoastable users automatically.
+If Neo4j credentials are supplied (recommended), PassInspector can automatically pull the following from the BloodHound data:
+* Enabled users
+* Administrative users (from "Administrators", "Domain Admins", and "Enterprise Admins" groups)
+* Kerberoastable users
 
-The following items are searched for by PassInspector:
-* The shortest password (not including blank passwords)
-* The longest password cracked
-* Accounts with blank passwords and if any of those accounts are enabled (when enabled accounts are provided)
-* Passwords containing common words such as "Password" or "Welcome"
-* Passwords containing keyboard walks such as "qwerty" or "asdf"
-* Passwords containing seasons of the year
-* Custom searched for password terms such as the company name
-* Identity password re-use between administrative and non-administrative accounts (when administrative accounts are provided)
-* Check if the username contains the password or the password contains the username
-* Check if any credential stuffing results are valid (will automatically search DeHashed if BreachCreds.py is in the same directory and a domain or Neo4j credentials are provided)
+## Features
 
-The two required files are:
-* The DCSync file, which should just be pasted in the format returned by SecretsDump (If not provided, it will try to find it)
-* The cracked passwords, which should just be pasted in the format output by Hashtopolis (If not provided, it will try to find it)
+PassInspector searches for the following security weaknesses:
 
-PassInspector will automatically fix any HEX formatted passwords and identify if LM hashes are stored for any accounts.
+* Password Lengths: Finds the shortest and longest passwords cracked (excluding blank passwords).
+* Blank Passwords: Identifies accounts with blank passwords and flags enabled accounts.
+* Common Passwords: Detects passwords containing common words such as "password" or "welcome".
+* Keyboard Walks: Detects passwords containing sequential keyboard patterns such as "qwerty" or "asdf".
+* Season-based Passwords: Identifies passwords containing seasons of the year (e.g., "Winter2024").
+* Custom Word Search: Allows searching for custom terms (e.g., company names or abbreviations).
+* Administrative Password Reuse: Detects if an administrative password is reused in non-administrative accounts using NT hash matching, so it is not dependant on the administrative passwords being cracked
+* Username in Password: Flags accounts where the username is part of the password.
+* Credential Stuffing Validation:
+  * Checks credential stuffing results against cracked passwords.
+  * Automatically searches DeHashed if BreachCreds.py is in the same directory and a domain or Neo4j credentials are provided.
+* Spray Attack Analysis:
+  * Matches cracked passwords to password spray lists.
+  * Matches cracked usernames to lists of sprayed users.
+* Local Hash Matching: Checks if domain accounts reuse local account passwords (e.g., from LSASS dumps).
+* Duplicate Password Identification: Assigns a unique identifier for each password to detect reuse without exposing plaintext passwords.
+* HEX Password Correction: Automatically fixes any HEX-formatted passwords.
+* LM Hash Detection: Identifies if LM hashes are stored for any accounts.
 
-When searching for administrative password re-use, it uses the NT hash, so it is not necessary to crack the administrative password to determine if it is re-used.
+## Required Files
 
-Three files are output:
-* allcracked - This file contains all of the cracked passwords, their username, if the account is enabled (if the file is supplied), and if the account is administrative (if the file is supplied)
-* results - These are all the interesting goodies like the shortest passwords, longest passwords, which administrative account(s) share a password with which non-administrative account(s), etc.
-* Excel doc - An Excel document will also be output with various columns that can be used to manually investigate results
+PassInspector requires at least one of the following input files:
 
-## To Do
-* Output which administrative passwords were cracked
+* DCSync Output: A file containing the results of a DCSync attack, in the format:
+`DOMAIN\USER:RID:LMHASH:NTHASH:::`
+(If not provided, PassInspector will attempt to find it automatically.)
+
+* Cracked Passwords: A file containing cracked NTLM hashes in the format:
+`NTHASH:PASSWORD`
+(If not provided, PassInspector will attempt to find it automatically.)
+
+## Output Files
+
+PassInspector generates three output files:
+* allcracked.txt – Contains all cracked passwords, their usernames, whether the account is enabled (if provided), and whether the account is administrative (if provided).
+* results.txt – Includes key findings such as shortest/longest passwords, administrative password reuse, and more.
+* Excel Report – An .xlsx file with various columns for manual investigation.
 
 ## Installation
+`virtualenv -p python3 venv-passinspector`
+`source venv-passinspector/bin/activate`
 `pip install -r requirements.txt`
 `python3 PassInspector.py`
 
 ## Usage
 ```bash
-python PassInspector.py -d <dcsync file> -p <password-file> [-a <admin-users-file> -c <custom-search-terms> -e <enabled-users-file>]
+python PassInspector.py -d <dcsync-file> -p <password-file> [-a <admin-users-file> -c <custom-search-terms> -e <enabled-users-file> -sp <spray-passwords-file> -su <spray-users-file> -lh <local-hashes-file> -cs <credential-stuffing-file> -csd <cred-stuffing-domains> -db -nd -dpi -fp <file-prefix>]
 ```
 
 **Example**
@@ -121,25 +140,26 @@ Done!
 
 Parameter | Description
 ----- | ----- 
--h | Help dialog
--a | (OPTIONAL) A file containing a list of domain administrative users. The script will check if the passwords for these users are used on other accounts by using hashes. The format should be DOMAIN\USERNAME or USERNAME.
--c | (OPTIONAL) Comma-separated terms you would like searched for, such as the organization's name or acronym in lowercase
--cs | (OPTIONAL) Only required if BreachCreds.py is not in teh same directory. Colon-separated file containing credential stuffing accounts in the format of email:password
--csd | (OPTIONAL) If BreachCreds.py is in the same directory, these comma-separated domains will be used to search DeHashed for credential stuffing credentials
--d | (OPTIONAL) A file containing the output of a DCSync in the format of DOMAIN\USER:RID:LMHASH:NTHASH:::
--dpi | (OPTIONAL) Add a unique identifier for each password, so the customer can identify password reuse without needing the passwords.
--e | (OPTIONAL) A file containing a list of enabled domain users. If specified, it will specify enabled users in the output. The format should be DOMAIN\USERNAME or USERNAME
--fp | (OPTIONAL) File output prefix (if none is provided, datetime will be used instead.)
--k | (OPTIONAL) A file containing all of the Kerberoastable users. Overrides automatic Neo4j queries.
--nd | (OPTIONAL) Skip DeHashed search
--nh | (OPTIONAL) Neo4j hostname or IP (Default: localhost)
--nu | (OPTIONAL) Neo4j username for automatic queries (Default: neo4j)
--np | (OPTIONAL) Neo4j password for automatic queries. Must be specified for automatic queries to be attempted.
--p | (OPTIONAL) A file containing all of the cracked passwords from Hashtopolis in the form of NTHASH:PASSWORD
--ph | (OPTIONAL) Prepare hashes for cracking on Hashtopolis. A list of unique NT hashes will be output, with any accounts that have a cleartext password removed.
--s | (OPTIONAL) A file containing a list of students. Can be a BH JSON export, Neo4J CSV export, or a txt file with one username per line.
--su | (OPTIONAL) Match cracked users to list of usernames that will be sprayed.
--sp | (OPTIONAL) Match cracked passwords to passwords in the spray list.
+-a, --admins | (Optional) File containing administrative users (DOMAIN\USERNAME or USERNAME). BloodHound JSON files are also accepted. Overrides automatic Neo4j queries.
+-c, --custom | (Optional) Comma-separated list of custom terms to search for in passwords.
+-cs, --cred-stuffing | (Optional) File containing credential stuffing accounts in email:password format. Used if BreachCreds.py is not present.
+-csd, --cred-stuffing-domains | (Optional) If BreachCreds.py is present, specify comma-separated domains to search DeHashed for credential stuffing.
+-d, --dcsync | (Optional) File containing the output of a DCSync attack (DOMAIN\USER:RID:LMHASH:NTHASH:::).
+-db, --debug | (Optional) Enable debug messages.
+-dpi, --duplicate-password-identifier | (Optional) Assigns unique identifiers to passwords for detecting reuse without exposing plaintext.
+-e, --enabled | (Optional) File containing enabled domain users (DOMAIN\USERNAME or USERNAME). BloodHound JSON, Neo4j CSV, or automatic Neo4j queries are also supported.
+-fp, --file-prefix | (Optional) Custom file output prefix (default: timestamp).
+-k, --kerberoastable-users | (Optional) File containing Kerberoastable users. Overrides automatic Neo4j queries.
+-lh, --local-hashes | (Optional) LSASS dump file to check for local account password reuse.
+-nd, --no-dehashed | (Optional) Skip DeHashed search.
+-nh, --neo4j-hostname | (Optional) Neo4j hostname or IP (default: localhost).
+-nu, --neo4j-username | (Optional) Neo4j username (default: neo4j).
+-np, --neo4j-password | (Optional) Neo4j password (required for automatic queries).
+-p, --passwords	(Optional) | File containing cracked passwords from Hashtopolis (NTHASH:PASSWORD).
+-ph, --prepare-hashes | (Optional) Prepare hashes for Hashtopolis by outputting unique NT hashes, removing accounts with cleartext passwords.
+-s, --students | (Optional) File containing students (DOMAIN\USERNAME or USERNAME). BloodHound JSON files are also accepted.
+-sp, --spray-passwords | (Optional) File containing password spray lists to match against cracked passwords.
+-su, --spray-users | (Optional) File containing usernames that were sprayed to match against cracked users.
 
 ## Errors
 
