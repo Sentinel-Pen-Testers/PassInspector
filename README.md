@@ -34,11 +34,15 @@ PassInspector searches for the following security weaknesses:
 PassInspector requires at least one of the following input files:
 
 * DCSync Output: A file containing the results of a DCSync attack, in the format:
+* 
 `DOMAIN\USER:RID:LMHASH:NTHASH:::`
+
 (If not provided, PassInspector will attempt to find it automatically.)
 
 * Cracked Passwords: A file containing cracked NTLM hashes in the format:
+* 
 `NTHASH:PASSWORD`
+
 (If not provided, PassInspector will attempt to find it automatically.)
 
 ## Output Files
@@ -50,11 +54,16 @@ PassInspector generates three output files:
 
 ## Installation
 `virtualenv -p python3 venv-passinspector`
+
 `source venv-passinspector/bin/activate`
+
 `pip install -r requirements.txt`
+
 `python3 PassInspector.py`
 
+
 ## Usage
+
 ```bash
 python PassInspector.py -d <dcsync-file> -p <password-file> [-a <admin-users-file> -c <custom-search-terms> -e <enabled-users-file> -sp <spray-passwords-file> -su <spray-users-file> -lh <local-hashes-file> -cs <credential-stuffing-file> -csd <cred-stuffing-domains> -db -nd -dpi -fp <file-prefix>]
 ```
