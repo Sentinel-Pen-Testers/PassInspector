@@ -53,6 +53,7 @@ PassInspector generates three output files:
 * Excel Report – An .xlsx file with various columns for manual investigation.
 
 ## Installation
+
 `virtualenv -p python3 venv-passinspector`
 
 `source venv-passinspector/bin/activate`
@@ -61,6 +62,9 @@ PassInspector generates three output files:
 
 `python3 PassInspector.py`
 
+## To do
+
+* Implement better logic for finding domain administrative users rather than relying on built in groups
 
 ## Usage
 
