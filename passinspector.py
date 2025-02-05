@@ -8,6 +8,7 @@ import os
 import re
 import sys
 import xlsxwriter
+from tqdm import tqdm
 
 """This script is created to parse through cracked passwords to find weak patterns that can be added to the report."""
 
@@ -41,8 +42,8 @@ class User:
         self.local_pass_repeat = local_pass_repeat
         self.pass_repeat = pass_repeat
         self.email = email
-        self.spray_user = False
-        self.spray_password = False
+        self.spray_user = spray_user
+        self.spray_password = spray_password
 
 
 
@@ -89,19 +90,39 @@ def central_station(search_terms, admin_users, enabled_users, dcsync_filename, p
             user_database_cracked.append(user)
 
     print("Calculating statistics")
-    #stat_shortest, stat_longest, result_shortest_passwords, result_longest_passwords = calculate_password_long_short(
-    #    user_database)
-    stat_enabled_shortest, stat_enabled_longest, result_enabled_shortest_passwords, result_enabled_longest_passwords, stat_all_shortest, stat_all_longest, result_all_shortest_passwords, result_all_longest_passwords = calculate_password_long_short(user_database)
+    # Create a progress bar with eight steps
+    pbar = tqdm(total=8, desc="Calculating statistics", ncols=100)
+    # Step 1: Calculate password lengths for enabled and all users
+    stat_enabled_shortest, stat_enabled_longest, result_enabled_shortest_passwords, result_enabled_longest_passwords, \
+        stat_all_shortest, stat_all_longest, result_all_shortest_passwords, result_all_longest_passwords = \
+        calculate_password_long_short(user_database)
+    pbar.update(1)
+    # Step 2: Perform password search on cracked users
     (text_blank_passwords, text_terms, text_seasons, text_keyboard_walks, text_custom_search, result_blank_passwords,
-     result_common_terms, result_seasons, result_keyboard_walks, result_custom_search) = perform_password_search(
-        user_database_cracked, search_terms)
+     result_common_terms, result_seasons, result_keyboard_walks, result_custom_search) = \
+        perform_password_search(user_database_cracked, search_terms)
+    pbar.update(1)
+    # Step 3: Search for usernames used as passwords
     text_username_passwords, result_username_passwords = username_password_search(user_database_cracked)
+    pbar.update(1)
+    # Step 4: Inspect administrative password reuse
     text_admin_pass_reuse, results_admin_pass_reuse = admin_password_inspection(user_database)
+    pbar.update(1)
+    # Step 5: Inspect LM hash usage
     text_lm_hashes, result_lm_hash_users = lm_hash_inspection(user_database)
-    text_blank_passwords, result_blank_enabled = blank_enabled_search(user_database, text_blank_passwords) # Updates the blank password text with enabled account count
+    pbar.update(1)
+    # Step 6: Identify enabled accounts with blank passwords
+    text_blank_passwords, result_blank_enabled = blank_enabled_search(user_database, text_blank_passwords)
+    pbar.update(1)
+    # Step 7: Check for credential stuffing matches
     text_cred_stuffing, result_cred_stuffing = cred_stuffing_check(cred_stuffing_accounts, dcsync_results)
+    pbar.update(1)
+    # Step 8: Check for spray matches
     user_database, num_spray_matches, num_pass_spray_matches = check_if_spray(user_database, spray_users_filename,
-                                                                               spray_passwords_filename)
+                                                                              spray_passwords_filename)
+    pbar.update(1)
+    pbar.close()
+    # Step 9: Check for password reuse (this takes a while compared to the others, so it gets its own loading bar)
     user_database = count_pass_repeat(user_database)
     if duplicate_password_identifier:
         user_database = calc_duplicate_password_identifier(user_database)
@@ -375,77 +396,85 @@ def check_domains(dcsync_file_lines, admin_users, enabled_users, kerberoastable_
     if not admin_users and not enabled_users and not kerberoastable_users:
         return dcsync_file_lines, admin_users, enabled_users, kerberoastable_users
 
-    # Get domain(s) from DCSync file
-    for line in dcsync_file_lines:
+    # ------------------------------------------------------------
+    # Phase 1: Extract domains from DCSync file lines
+    # ------------------------------------------------------------
+    for line in tqdm(dcsync_file_lines, desc="Extracting domains from DCSync", ncols=80):
         try:
             parts = line.split(':')
             domain_user_combined = parts[0].split('\\', 1)
         except IndexError:
             print(f"ERROR: Index error encountered: {IndexError}")
             return None
-        # If there is a domain specified, get the domain
+        # If there is a domain specified, add it to the set
         if len(domain_user_combined) == 2:
             dcsync_domains.add(domain_user_combined[0].lower())
 
-    # Get domain(s) from imported files or from Neo4j
-    for user in admin_users:
+    # ------------------------------------------------------------
+    # Phase 2: Extract domains from imported user lists
+    # ------------------------------------------------------------
+    for user in tqdm(admin_users, desc="Processing admin users", ncols=80):
         imported_domains.add(user['DOMAIN'].lower())
-    for user in enabled_users:
+    for user in tqdm(enabled_users, desc="Processing enabled users", ncols=80):
         imported_domains.add(user['DOMAIN'].lower())
-    for user in kerberoastable_users:
+    for user in tqdm(kerberoastable_users, desc="Processing kerberoastable users", ncols=80):
         imported_domains.add(user['DOMAIN'].lower())
 
-    # Compare to see if any domains are just in the DCSync or provided docs/Neo4j
     if DEBUG_MODE:
         print(f"DEBUG: imported_domains {imported_domains}")
         print(f"DEBUG: dcsync_domains {dcsync_domains}")
-    for domain in imported_domains:
+
+    # ------------------------------------------------------------
+    # Phase 3: Compare domains to find uniques
+    # ------------------------------------------------------------
+    for domain in tqdm(imported_domains, desc="Comparing imported domains", ncols=80):
         if domain not in dcsync_domains:
             unique_domains_imported.add(domain)
-    for domain in dcsync_domains:
+    for domain in tqdm(dcsync_domains, desc="Comparing DCSync domains", ncols=80):
         if domain not in imported_domains:
             unique_domains_dcsync.add(domain)
 
-    # See if the user wants to fix any unique domains if they were found in the imported data
+    # ------------------------------------------------------------
+    # Phase 4: Resolve unique domains from imported data
+    # ------------------------------------------------------------
     if unique_domains_imported:
-        for unique_domain in unique_domains_imported:
+        for unique_domain in tqdm(unique_domains_imported, desc="Resolving unique imported domains", ncols=80):
             no_match_text = "DCSync"
             new_domain = ""
             try:
-                # If curses exists, use the TUI
+                # Try to use curses TUI if available
                 import curses
                 new_domain = curses.wrapper(domain_change_tui, unique_domain, no_match_text, dcsync_domains)
             except ImportError:
-                # If curses is not available, use the CLI
+                # Otherwise, fallback to CLI
                 new_domain = domain_change_cli(unique_domain, no_match_text, dcsync_domains)
 
             if new_domain:
                 old_domain = unique_domain
-                admin_users, enabled_users, kerberoastable_users = replace_imported_domain(old_domain, new_domain,
-                                                                                           admin_users, enabled_users,
-                                                                                           kerberoastable_users)
+                admin_users, enabled_users, kerberoastable_users = replace_imported_domain(
+                    old_domain, new_domain, admin_users, enabled_users, kerberoastable_users)
             else:
                 print(f"No changes made for domain {unique_domain}")
 
+    # ------------------------------------------------------------
+    # Phase 5: Resolve unique domains from the DCSync file
+    # ------------------------------------------------------------
     if unique_domains_dcsync:
         neo4j_status = testNeo4jConnectivity()
 
-        for unique_domain in unique_domains_dcsync:
+        for unique_domain in tqdm(unique_domains_dcsync, desc="Resolving unique DCSync domains", ncols=80):
             no_match_text = "imported data"
             new_domain = ""
-
             if neo4j_status:
-                # Attempt to fix it automatically using Neo4j data if possible
+                # Attempt to fix automatically using Neo4j data if possible
                 new_domain = domain_change_auto(unique_domain, dcsync_file_lines)
 
-            # If it was not able to auto-resolve it, prompt the user
+            # If auto-resolve failed, prompt the user
             if new_domain == "":
                 try:
-                    # If curses exists, use the TUI
                     import curses
                     new_domain = curses.wrapper(domain_change_tui, unique_domain, no_match_text, imported_domains)
                 except ImportError:
-                    # If curses is not available, use the CLI
                     new_domain = domain_change_cli(unique_domain, no_match_text, imported_domains)
 
             if new_domain:
@@ -595,15 +624,17 @@ def replace_dcsync_domain(old_domain, new_domain, dcsync_file_lines):
 
 def create_user_database(dcsync_file_lines, cleartext_creds, admin_users, enabled_users, kerberoastable_users, password_file_lines):
     user_database = []
+    skipped_lines = []
 
-    for line in dcsync_file_lines:
+    # Wrap the iteration over the DCSync file lines with a tqdm progress bar
+    for line in tqdm(dcsync_file_lines, desc="Importing users"):
         # Split the line into its components (assuming the format: DOMAIN\USERNAME:RID:LMHASH:NTHASH:::)
         try:
             domain_user, rid, lmhash, nthash, *_ = line.split(':')  # Extract and discard RID
             domain, username = domain_user.split('\\')
         except ValueError:
             # Handle improperly formatted lines
-            print(f"Skipping processing for invalid line in dcsync. Likely no domain or other format issue: {line}")
+            skipped_lines.append(f"Skipping processing for invalid line in dcsync. Likely no domain or other format issue: {line}")
             continue
 
         # Determine derived attributes
@@ -640,11 +671,9 @@ def create_user_database(dcsync_file_lines, cleartext_creds, admin_users, enable
             )
         )
 
-    # DEBUG
-    #print("PRINTING DATABASE")
-    #for user in user_database:
-    #    print(f"{user.domain}\\{user.username} - Admin: {user.is_admin}, Cracked: {user.cracked}")
-    #exit()
+    if skipped_lines:
+        for skipped in skipped_lines:
+            print(skipped)
 
     return user_database
 
@@ -684,18 +713,6 @@ def dehexify(password):
         # Handle the case where the hex conversion fails
         print("ERROR: Could not dehexify the following value: ", password)
     return dehexed_password
-
-
-def calculate_cracked_deprecated(dcsync_results):
-    if DEBUG_MODE:
-        print("DEBUG: WHY AM I HERE?")
-    unique_nt_hashes = set()
-    cracked_accounts = []
-    for record in dcsync_results:
-        if record['CRACKED']:
-            unique_nt_hashes.add(record['NTHASH'])
-            cracked_accounts.append(record)
-    return len(unique_nt_hashes), len(cracked_accounts)
 
 
 def check_if_enabled(user, domain, enabled_users):
@@ -1470,10 +1487,9 @@ def add_cleartext_creds(user_database, cleartext_creds):
 
 
 def count_pass_repeat(user_database):
-    for user in user_database:
+    for user in tqdm(user_database, desc="Counting password repeats (May take a while)", ncols=80, file=sys.stdout):
         pass_repeat_count = sum(1 for other_user in user_database if user.nthash == other_user.nthash)
         user.pass_repeat = pass_repeat_count
-
     return user_database
 
 
