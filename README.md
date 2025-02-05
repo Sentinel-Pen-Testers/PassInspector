@@ -34,13 +34,13 @@ PassInspector searches for the following security weaknesses:
 PassInspector requires at least one of the following input files:
 
 * DCSync Output: A file containing the results of a DCSync attack, in the format:
-* 
+  
 `DOMAIN\USER:RID:LMHASH:NTHASH:::`
 
 (If not provided, PassInspector will attempt to find it automatically.)
 
 * Cracked Passwords: A file containing cracked NTLM hashes in the format:
-* 
+  
 `NTHASH:PASSWORD`
 
 (If not provided, PassInspector will attempt to find it automatically.)
