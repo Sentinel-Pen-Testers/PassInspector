@@ -8,18 +8,18 @@ import os
 import re
 import sys
 import xlsxwriter
+from tqdm import tqdm
 
 """This script is created to parse through cracked passwords to find weak patterns that can be added to the report."""
 
 NEO4J_PASSWORD = "bloodhoundcommunityedition"
-NEO4J_QUERIES = {
-    "admins": "MATCH (u:User)-[:MemberOf]->(g:Group) WHERE toUpper(g.name) CONTAINS 'DOMAIN ADMINS' OR "
-              "g.name CONTAINS 'ENTERPRISE ADMINS' OR g.name STARTS WITH 'ADMINISTRATORS@' RETURN "
-              "DISTINCT toLower(u.domain) + '\\\\' + toLower(u.samaccountname) AS user",
-    "enabled": "MATCH (u:User) WHERE u.enabled=true RETURN tolower(u.domain) + '\\\\' + "
-               "tolower(u.samaccountname) AS user",
-    "kerberoastable": "MATCH (u:User)WHERE u.hasspn=true RETURN tolower(u.domain) + '\\\\' + "
-                      "tolower(u.samaccountname) AS user"}
+NEO4J_QUERIES = {"admins": "MATCH (u:User)-[:MemberOf]->(g:Group) WHERE toUpper(g.name) CONTAINS 'DOMAIN ADMINS' OR "
+                           "g.name CONTAINS 'ENTERPRISE ADMINS' OR g.name STARTS WITH 'ADMINISTRATORS@' RETURN "
+                           "DISTINCT toLower(u.domain) + '\\\\' + toLower(u.samaccountname) AS user",
+                 "enabled": "MATCH (u:User) WHERE u.enabled=true RETURN tolower(u.domain) + '\\\\' + "
+                            "tolower(u.samaccountname) AS user",
+                 "kerberoastable": "MATCH (u:User)WHERE u.hasspn=true RETURN tolower(u.domain) + '\\\\' + "
+                                   "tolower(u.samaccountname) AS user"}
 NEO4J_URI = f"neo4j://localhost"
 NEO4J_USERNAME = "neo4j"
 
@@ -41,9 +41,8 @@ class User:
         self.local_pass_repeat = local_pass_repeat
         self.pass_repeat = pass_repeat
         self.email = email
-        self.spray_user = False
-        self.spray_password = False
-
+        self.spray_user = spray_user
+        self.spray_password = spray_password
 
 
 def central_station(search_terms, admin_users, enabled_users, dcsync_filename, passwords_filename, students_filename,
@@ -89,20 +88,44 @@ def central_station(search_terms, admin_users, enabled_users, dcsync_filename, p
             user_database_cracked.append(user)
 
     print("Calculating statistics")
-    #stat_shortest, stat_longest, result_shortest_passwords, result_longest_passwords = calculate_password_long_short(
-    #    user_database)
-    stat_enabled_shortest, stat_enabled_longest, result_enabled_shortest_passwords, result_enabled_longest_passwords, stat_all_shortest, stat_all_longest, result_all_shortest_passwords, result_all_longest_passwords = calculate_password_long_short(user_database)
+
+    # Create a progress bar with eight steps
+    pbar = tqdm(total=9, desc="Calculating statistics", ncols=100)
+
+    # Step 1: Calculate password lengths for enabled and all users
+    stat_enabled_shortest, stat_enabled_longest, result_enabled_shortest_passwords, result_enabled_longest_passwords, \
+        stat_all_shortest, stat_all_longest, result_all_shortest_passwords, result_all_longest_passwords = \
+        calculate_password_long_short(user_database)
+    pbar.update(1)
+    # Step 2: Perform password search on cracked users
     (text_blank_passwords, text_terms, text_seasons, text_keyboard_walks, text_custom_search, result_blank_passwords,
-     result_common_terms, result_seasons, result_keyboard_walks, result_custom_search) = perform_password_search(
-        user_database_cracked, search_terms)
+     result_common_terms, result_seasons, result_keyboard_walks, result_custom_search) = \
+        perform_password_search(user_database_cracked, search_terms)
+    pbar.update(1)
+    # Step 3: Search for usernames used as passwords
     text_username_passwords, result_username_passwords = username_password_search(user_database_cracked)
+    pbar.update(1)
+    # Step 4: Inspect administrative password reuse
     text_admin_pass_reuse, results_admin_pass_reuse = admin_password_inspection(user_database)
+    pbar.update(1)
+    # Step 5: Inspect LM hash usage
     text_lm_hashes, result_lm_hash_users = lm_hash_inspection(user_database)
-    text_blank_passwords, result_blank_enabled = blank_enabled_search(user_database, text_blank_passwords) # Updates the blank password text with enabled account count
+    pbar.update(1)
+    # Step 6: Identify enabled accounts with blank passwords
+    text_blank_passwords, result_blank_enabled = blank_enabled_search(user_database, text_blank_passwords)
+    pbar.update(1)
+    # Step 7: Check for credential stuffing matches
     text_cred_stuffing, result_cred_stuffing = cred_stuffing_check(cred_stuffing_accounts, dcsync_results)
+    pbar.update(1)
+    # Step 8: Check for spray matches
     user_database, num_spray_matches, num_pass_spray_matches = check_if_spray(user_database, spray_users_filename,
-                                                                               spray_passwords_filename)
+                                                                              spray_passwords_filename)
+    pbar.update(1)
+    # Step 9: Check for password reuse
     user_database = count_pass_repeat(user_database)
+    pbar.update(1)
+    pbar.close()
+
     if duplicate_password_identifier:
         user_database = calc_duplicate_password_identifier(user_database)
 
@@ -163,84 +186,35 @@ def open_file(l_filename):
 def check_if_spray(user_database, spray_users_filename, spray_passwords_filename):
     num_spray_matches = 0
     num_pass_spray_matches = 0
-    neo4j_connectivity = testNeo4jConnectivity()
 
-    # Return default values if no spray files are provided and Neo4j is unavailable
-    if not spray_users_filename and not spray_passwords_filename and not neo4j_connectivity:
-        print("No input files provided, and Neo4j connectivity is unavailable. Exiting.")
+    # Return default values if no spray files have been provided
+    if not spray_users_filename and not spray_passwords_filename:
         return user_database, 123456, 123456  # Tells the printing function not to print these stats
 
-    # Step 1: Fetch emails from Neo4j if Neo4j connectivity is available
-    if neo4j_connectivity:
-        print("Fetching emails from Neo4j...")
-        user_database = emails_from_neo4j(user_database)
-
-    # Step 2: Import data from external spray users file if provided
-    spray_users = []
+    # Check for username matches
     if spray_users_filename:
         spray_users = file_to_userlist(spray_users_filename)
-        if DEBUG_MODE:
-            print("DEBUG: Spray users provided")
-            print(spray_users)
+        for user in user_database:
+            user.spray_username = any(
+                spray_user['USERNAME'].lower() == user.username.lower() for spray_user in spray_users
+            )
 
-    # Step 3: Determine which users in the user database were found externally
-    externally_found_users = []
-    for user in user_database:
-        for external_user in spray_users:
-            if user in externally_found_users:  # Skip if user is already added
-                break
-
-            # Check if username matches
-            if user.username.lower() == external_user['USERNAME'].lower():
-                # Match domain if provided
-                if external_user['DOMAIN'] and user.domain.lower() == external_user['DOMAIN'].lower():
-                    externally_found_users.append(user)
-                    user.spray_user = True
-                    break
-                elif not external_user['DOMAIN']:  # Match username only if DOMAIN is None
-                    externally_found_users.append(user)
-                    user.spray_user = True
-                    break
-
-            # Check if spray_user in "username@domain.com" format matches the email
-            if external_user['DOMAIN']:  # Check only if DOMAIN is present
-                spray_email = f"{external_user['USERNAME']}@{external_user['DOMAIN']}".lower()
-                if user.email and user.email.lower() == spray_email:
-                    externally_found_users.append(user)
-                    user.spray_user = True
-                    break
-
-    if DEBUG_MODE:
-        print("DEBUG: Externally found users")
-        print([vars(user) for user in externally_found_users])
-
-    # Step 4: Check passwords from spray file if provided
+    # Check for password matches
     if spray_passwords_filename:
-        print("Checking passwords from spray file...")
         with open(spray_passwords_filename, 'r') as passwords_file:
-            spray_passwords = [password.strip().lower() for password in passwords_file]
-            if DEBUG_MODE:
-                print("DEBUG: Provided spray passwords")
-                print(spray_passwords)
+            spray_passwords = [password.strip() for password in passwords_file]
 
         for user in user_database:
-            if user.spray_user and user.password and user.password.lower() in spray_passwords:
-                user.spray_password = True
-            else:
-                user.spray_password = False
+            user.spray_password = user.password and user.password.lower() in spray_passwords
 
-    # Step 5: Calculate stats
-    if spray_passwords_filename:
-        for user in externally_found_users:
-            if user.spray_password and user.enabled:
-                num_spray_matches += 1
-            if user.spray_password and user.enabled:
-                num_pass_spray_matches += 1
-    else:
-        print("No spray password file supplied. Cannot calculate stats.")
+    # Calculate number of matches
+    for user in user_database:
+        if getattr(user, 'spray_username', False) and getattr(user, 'spray_password', False) and user.enabled:
+            num_spray_matches += 1
+        if getattr(user, 'spray_password', False) and user.enabled:
+            num_pass_spray_matches += 1
 
     return user_database, num_spray_matches, num_pass_spray_matches
-
 
 
 def write_xlsx(file_date, user_database):
@@ -250,6 +224,7 @@ def write_xlsx(file_date, user_database):
     workbook = xlsxwriter.Workbook(out_filename)
     worksheet = workbook.add_worksheet()
     cell_format = workbook.add_format()
+    cell_format.set_text_wrap()
     cell_format.set_align('top')
     cell_format.set_align('left')
     # cell_format.set_font_name('Barlow')  # If we pasted data into the report, this would help.
@@ -265,7 +240,7 @@ def write_xlsx(file_date, user_database):
     headers = [
         'DOMAIN', 'USERNAME', 'LMHASH', 'NTHASH', 'PASSWORD', 'CRACKED', 'HAS_LM',
         'BLANK_PASSWORD', 'ENABLED', 'IS_ADMIN', 'KERBEROASTABLE', 'STUDENT',
-        'LOCAL_PASS_REPEAT', 'PASS_REPEAT_COUNT', 'SPRAY_USER', 'SPRAY_PASSWORD'
+        'LOCAL_PASS_REPEAT', 'PASS_REPEAT_COUNT'
     ]
     worksheet.freeze_panes(1, 0)  # Freeze the top row
 
@@ -277,7 +252,7 @@ def write_xlsx(file_date, user_database):
     column_widths = [len(header) for header in headers]
     data = []
     hide_columns = {'LMHASH', 'NTHASH'}  # Columns to hide initially
-    conditional_hide_columns = {'ENABLED', 'IS_ADMIN', 'KERBEROASTABLE', 'STUDENT', 'LOCAL_PASS_REPEAT', 'SPRAY_USER', 'SPRAY_PASSWORD'}
+    conditional_hide_columns = {'ENABLED', 'IS_ADMIN', 'KERBEROASTABLE', 'STUDENT', 'LOCAL_PASS_REPEAT'}
     conditional_false_counts = {key: 0 for key in conditional_hide_columns}
     total_rows = len(user_database)
 
@@ -296,9 +271,7 @@ def write_xlsx(file_date, user_database):
             "True" if user.kerberoastable else "False",
             "True" if user.student else "False",
             user.local_pass_repeat,
-            user.pass_repeat,
-            user.spray_user,
-            user.spray_password
+            getattr(user, "pass_repeat_count", 0)
         ]
         data.append(values)
 
@@ -375,77 +348,85 @@ def check_domains(dcsync_file_lines, admin_users, enabled_users, kerberoastable_
     if not admin_users and not enabled_users and not kerberoastable_users:
         return dcsync_file_lines, admin_users, enabled_users, kerberoastable_users
 
-    # Get domain(s) from DCSync file
-    for line in dcsync_file_lines:
+    # ------------------------------------------------------------
+    # Phase 1: Extract domains from DCSync file lines
+    # ------------------------------------------------------------
+    for line in tqdm(dcsync_file_lines, desc="Extracting domains from DCSync", ncols=80):
         try:
             parts = line.split(':')
             domain_user_combined = parts[0].split('\\', 1)
         except IndexError:
             print(f"ERROR: Index error encountered: {IndexError}")
             return None
-        # If there is a domain specified, get the domain
+        # If there is a domain specified, add it to the set
         if len(domain_user_combined) == 2:
             dcsync_domains.add(domain_user_combined[0].lower())
 
-    # Get domain(s) from imported files or from Neo4j
-    for user in admin_users:
+    # ------------------------------------------------------------
+    # Phase 2: Extract domains from imported user lists
+    # ------------------------------------------------------------
+    for user in tqdm(admin_users, desc="Processing admin users", ncols=80):
         imported_domains.add(user['DOMAIN'].lower())
-    for user in enabled_users:
+    for user in tqdm(enabled_users, desc="Processing enabled users", ncols=80):
         imported_domains.add(user['DOMAIN'].lower())
-    for user in kerberoastable_users:
+    for user in tqdm(kerberoastable_users, desc="Processing kerberoastable users", ncols=80):
         imported_domains.add(user['DOMAIN'].lower())
 
-    # Compare to see if any domains are just in the DCSync or provided docs/Neo4j
     if DEBUG_MODE:
         print(f"DEBUG: imported_domains {imported_domains}")
         print(f"DEBUG: dcsync_domains {dcsync_domains}")
-    for domain in imported_domains:
+
+    # ------------------------------------------------------------
+    # Phase 3: Compare domains to find uniques
+    # ------------------------------------------------------------
+    for domain in tqdm(imported_domains, desc="Comparing imported domains", ncols=80):
         if domain not in dcsync_domains:
             unique_domains_imported.add(domain)
-    for domain in dcsync_domains:
+    for domain in tqdm(dcsync_domains, desc="Comparing DCSync domains", ncols=80):
         if domain not in imported_domains:
             unique_domains_dcsync.add(domain)
 
-    # See if the user wants to fix any unique domains if they were found in the imported data
+    # ------------------------------------------------------------
+    # Phase 4: Resolve unique domains from imported data
+    # ------------------------------------------------------------
     if unique_domains_imported:
-        for unique_domain in unique_domains_imported:
+        for unique_domain in tqdm(unique_domains_imported, desc="Resolving unique imported domains", ncols=80):
             no_match_text = "DCSync"
             new_domain = ""
             try:
-                # If curses exists, use the TUI
+                # Try to use curses TUI if available
                 import curses
                 new_domain = curses.wrapper(domain_change_tui, unique_domain, no_match_text, dcsync_domains)
             except ImportError:
-                # If curses is not available, use the CLI
+                # Otherwise, fallback to CLI
                 new_domain = domain_change_cli(unique_domain, no_match_text, dcsync_domains)
 
             if new_domain:
                 old_domain = unique_domain
-                admin_users, enabled_users, kerberoastable_users = replace_imported_domain(old_domain, new_domain,
-                                                                                           admin_users, enabled_users,
-                                                                                           kerberoastable_users)
+                admin_users, enabled_users, kerberoastable_users = replace_imported_domain(
+                    old_domain, new_domain, admin_users, enabled_users, kerberoastable_users)
             else:
                 print(f"No changes made for domain {unique_domain}")
 
+    # ------------------------------------------------------------
+    # Phase 5: Resolve unique domains from the DCSync file
+    # ------------------------------------------------------------
     if unique_domains_dcsync:
         neo4j_status = testNeo4jConnectivity()
 
-        for unique_domain in unique_domains_dcsync:
+        for unique_domain in tqdm(unique_domains_dcsync, desc="Resolving unique DCSync domains", ncols=80):
             no_match_text = "imported data"
             new_domain = ""
-
             if neo4j_status:
-                # Attempt to fix it automatically using Neo4j data if possible
+                # Attempt to fix automatically using Neo4j data if possible
                 new_domain = domain_change_auto(unique_domain, dcsync_file_lines)
 
-            # If it was not able to auto-resolve it, prompt the user
+            # If auto-resolve failed, prompt the user
             if new_domain == "":
                 try:
-                    # If curses exists, use the TUI
                     import curses
                     new_domain = curses.wrapper(domain_change_tui, unique_domain, no_match_text, imported_domains)
                 except ImportError:
-                    # If curses is not available, use the CLI
                     new_domain = domain_change_cli(unique_domain, no_match_text, imported_domains)
 
             if new_domain:
@@ -535,75 +516,32 @@ def replace_imported_domain(old_domain, new_domain, admin_users, enabled_users, 
             user['DOMAIN'] = new_domain
     return admin_users, enabled_users, kerberoastable_users
 
-def domain_change_auto(old_domain, dcsync_file_lines):
-    # This function checks all users matching a unique domain to see if they appear in Neo4j
-    # a single time. If so, it will auto "fix" them. Otherwise, it'll skip on to allow a
-    # manual adjustment to be made
-
-    # Step 1: Extract all usernames for the unique domain
-    usernames = []
-    for line in dcsync_file_lines:
-        if "\\" in line:
-            domain, rest = line.split("\\", 1)  # Split at the first occurrence of '\'
-            if domain.lower() == old_domain.lower():
-                username = rest.split(":", 1)[0]  # Extract the username before the first ':'
-                usernames.append(username)
-    if DEBUG_MODE:
-        print(f"Found the following users for the {old_domain} domain:")
-        print(usernames)
-
-    if not usernames:
-        print(f"No usernames found for the domain '{old_domain}' in the DCSync file. Something must have gone wrong.")
-        return ""
-
-    # Step 2: Search Neo4j for each username and collect associated domains
-    resolved_domains = set()
-    for username in usernames:
-        query_string = f"MATCH (u:User) WHERE u.name contains toUpper('{username}') RETURN DISTINCT toLower(u.domain) + '\\\\' + toLower(u.samaccountname) AS user"
-        results = neo4j_query(query_string)
-
-        for result in results:
-            resolved_domains.add(result['DOMAIN'].lower())
-            if DEBUG_MODE:
-                print(f"User {username} found in Neo4j with domain of {result['DOMAIN'].lower()}")
-
-    # Step 3: Determine if all results point to the same domain
-    if DEBUG_MODE:
-        print(f"When searching DCSync users with {old_domain} domain, the following domains were found: {resolved_domains}")
-    if len(resolved_domains) == 1:
-        # If there was just one domain returned, it successfully figured out the matching domain automatically
-        resolved_domain = resolved_domains.pop()
-        return resolved_domain
-    elif len(resolved_domains) == 0:
-        print(f"No matching domains found in Neo4j for users under '{old_domain}'.")
-        return ""
-    else:
-        print(f"Failed to automatically resolve domain '{old_domain}'")
-        return ""
 
 def replace_dcsync_domain(old_domain, new_domain, dcsync_file_lines):
     print(f"Updating {old_domain} domain in DCSync to {new_domain}")
 
-    for i in range(len(dcsync_file_lines)):
-        if "\\" in dcsync_file_lines[i]:
-            domain, rest = dcsync_file_lines[i].split("\\", 1)  # Split only at the first occurrence of '\'
-            if domain.lower() == old_domain.lower():  # Case-insensitive comparison
-                dcsync_file_lines[i] = f"{new_domain}\\{rest}"
+    i = 0
+    while i < len(dcsync_file_lines):
+        dcsync_file_lines[i] = dcsync_file_lines[i].split("\\")
+        dcsync_file_lines[i][0] = new_domain
+        dcsync_file_lines[i] = "\\".join(dcsync_file_lines[i])
+        i += 1
 
     return dcsync_file_lines
 
-
 def create_user_database(dcsync_file_lines, cleartext_creds, admin_users, enabled_users, kerberoastable_users, password_file_lines):
     user_database = []
+    skipped_lines = []
 
-    for line in dcsync_file_lines:
+    # Wrap the iteration over the DCSync file lines with a tqdm progress bar
+    for line in tqdm(dcsync_file_lines, desc="Importing users"):
         # Split the line into its components (assuming the format: DOMAIN\USERNAME:RID:LMHASH:NTHASH:::)
         try:
             domain_user, rid, lmhash, nthash, *_ = line.split(':')  # Extract and discard RID
             domain, username = domain_user.split('\\')
         except ValueError:
             # Handle improperly formatted lines
-            print(f"Skipping processing for invalid line in dcsync. Likely no domain or other format issue: {line}")
+            skipped_lines.append(f"Skipping processing for invalid line in dcsync. Likely no domain or other format issue: {line}")
             continue
 
         # Determine derived attributes
@@ -640,11 +578,9 @@ def create_user_database(dcsync_file_lines, cleartext_creds, admin_users, enable
             )
         )
 
-    # DEBUG
-    #print("PRINTING DATABASE")
-    #for user in user_database:
-    #    print(f"{user.domain}\\{user.username} - Admin: {user.is_admin}, Cracked: {user.cracked}")
-    #exit()
+    if skipped_lines:
+        for skipped in skipped_lines:
+            print(skipped)
 
     return user_database
 
@@ -1331,9 +1267,6 @@ def file_to_userlist(filename=None):
                 elif '/' in line:
                     parts = line.split('/')
                     users.append({'USERNAME': parts[1], 'DOMAIN': parts[0]})
-                else:
-                    # Handle lines with only the username and no domain
-                    users.append({'USERNAME': line, 'DOMAIN': None})
     elif filename.endswith('.csv'):  # Handle Neo4J CSV Exports:
         users = []
         with open(filename, 'r', encoding='utf-8') as file:
@@ -1349,13 +1282,12 @@ def file_to_userlist(filename=None):
                     line = line.split(",")
                     users.append({'USERNAME': line[0], 'DOMAIN': line[1]})
                 else:
-                    users.append({'USERNAME': line, 'DOMAIN': None})
+                    users.append({'USERNAME': line[0]})
     else:
         print("ERROR: Do not recognize file extension: ", filename)
-        return []
+        return
 
     return users
-
 
 
 def convert_to_leetspeak(term):
@@ -1470,10 +1402,10 @@ def add_cleartext_creds(user_database, cleartext_creds):
 
 
 def count_pass_repeat(user_database):
-    for user in user_database:
+    # Set position=1 so that if a parent bar is at position=0, this bar is nested below it.
+    for user in tqdm(user_database, desc="Counting password repeats", position=1, ncols=80, file=sys.stdout):
         pass_repeat_count = sum(1 for other_user in user_database if user.nthash == other_user.nthash)
         user.pass_repeat = pass_repeat_count
-
     return user_database
 
 
@@ -1554,45 +1486,6 @@ def neo4j_query(query_string):
     except Exception as e:
         print(f"ERROR: Neo4j query failed, unable to pull users - {e}")
         return []
-
-def emails_from_neo4j(user_database):
-    try:
-        with GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USERNAME, NEO4J_PASSWORD)) as driver:
-            with driver.session() as session:  # Open a single session for the entire operation
-                for user in user_database:
-                    if user.domain:  # If domain is provided, include it in the query
-                        query = (
-                            "MATCH (u:User) "
-                            "WHERE toUpper(u.samaccountname) = $username "
-                            "AND toUpper(u.domain) = $domain "
-                            "RETURN u.email"
-                        )
-                        parameters = {
-                            "username": user.username.upper(),
-                            "domain": user.domain.upper()
-                        }
-                    else:  # If no domain, search by username only
-                        query = (
-                            "MATCH (u:User) "
-                            "WHERE toUpper(u.samaccountname) = $username "
-                            "RETURN u.email"
-                        )
-                        parameters = {
-                            "username": user.username.upper()
-                        }
-
-                    result = session.run(query, parameters)
-                    email = None
-                    for record in result:
-                        email = record["u.email"]
-                        break  # Retrieve the first email match and exit the loop
-                    user.email = email if email else None  # Assign email or None if not found
-            return user_database
-    except Exception as e:
-        print(f"ERROR: Neo4j query failed, unable to pull user emails - {e}")
-        return user_database
-
-
 
 
 def testNeo4jConnectivity():
@@ -1754,7 +1647,6 @@ def count_local_hash(user_database):
             local_hash_count += 1
     return local_hash_count
 
-
 def find_file(include=None, exclude=None):
     # include and exclude should be lists
 
@@ -1842,7 +1734,7 @@ if __name__ == '__main__':
     parser.add_argument('-d', '--dcsync', help='(OPTIONAL) A file containing the output of a DCSync in the '
                                                'format of DOMAIN\\USER:RID:LMHASH:NTHASH:::')
 
-    parser.add_argument('-db', '--debug', help='(OPTIONAL) Turn on debug messages', action='store_true')
+    parser.add_argument('-db', '--debug', help='(OPTIONAL) Turn on debug messages')
 
     parser.add_argument('-dpi', '--duplicate-password-identifier', action="store_true",
                         help='(OPTIONAL) Add a unique identifier for each password, so the customer can identify'
@@ -1864,7 +1756,7 @@ if __name__ == '__main__':
                                                       'script will determine if any of the domain accounts reuse local'
                                                       'account passwords.')
 
-    parser.add_argument('-nd', '--no-dehashed', action='store_false', help='(OPTIONAL) Skip DeHashed search')
+    parser.add_argument('-nd', '--no-dehashed', action='store_true', help='(OPTIONAL) Skip DeHashed search')
 
     parser.add_argument('-nh', '--neo4j-hostname', help='(OPTIONAL) Neo4j hostname or IP (Default: localhost)')
 
@@ -1912,9 +1804,15 @@ if __name__ == '__main__':
     spray_passwords_filename = args.spray_passwords
     duplicate_password_identifier = args.duplicate_password_identifier
 
-    search_dehashed = args.no_dehashed
+    if args.no_dehashed:
+        search_dehashed = False
+    else:
+        search_dehashed = True
 
-    DEBUG_MODE = args.debug
+    if args.debug:
+        DEBUG_MODE = True
+    else:
+        DEBUG_MODE = False
 
     # Parse Neo4j arguments if provided
     if args.neo4j_hostname:
