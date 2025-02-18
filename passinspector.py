@@ -286,7 +286,7 @@ def write_xlsx(file_date, user_database):
     headers = [
         'DOMAIN', 'USERNAME', 'LMHASH', 'NTHASH', 'PASSWORD', 'CRACKED', 'HAS_LM',
         'BLANK_PASSWORD', 'ENABLED', 'IS_ADMIN', 'KERBEROASTABLE', 'STUDENT',
-        'LOCAL_PASS_REPEAT', 'PASS_REPEAT_COUNT', 'SPRAY_USER', 'SPRAY_PASSWORD'
+        'LOCAL_PASS_REPEAT', 'PASS_REPEAT_COUNT', 'SPRAY_USER', 'SPRAY_PASSWORD', 'EMAIL'
     ]
     worksheet.freeze_panes(1, 0)  # Freeze the top row
 
@@ -298,7 +298,7 @@ def write_xlsx(file_date, user_database):
     column_widths = [len(header) for header in headers]
     data = []
     hide_columns = {'LMHASH', 'NTHASH'}  # Columns to hide initially
-    conditional_hide_columns = {'ENABLED', 'IS_ADMIN', 'KERBEROASTABLE', 'STUDENT', 'LOCAL_PASS_REPEAT', 'SPRAY_USER', 'SPRAY_PASSWORD'}
+    conditional_hide_columns = {'ENABLED', 'IS_ADMIN', 'KERBEROASTABLE', 'STUDENT', 'LOCAL_PASS_REPEAT', 'SPRAY_USER', 'SPRAY_PASSWORD', 'EMAIL'}
     conditional_false_counts = {key: 0 for key in conditional_hide_columns}
     total_rows = len(user_database)
 
@@ -319,7 +319,8 @@ def write_xlsx(file_date, user_database):
             user.local_pass_repeat,
             user.pass_repeat,
             user.spray_user,
-            user.spray_password
+            user.spray_password,
+            user.email
         ]
         data.append(values)
 
@@ -467,8 +468,9 @@ def check_domains(dcsync_file_lines, admin_users, enabled_users, kerberoastable_
             new_domain = ""
             if neo4j_status:
                 # Attempt to fix automatically using Neo4j data if possible
-                new_domain = domain_change_auto(unique_domain, dcsync_file_lines)
-
+                new_domain, resolved_pairs = domain_change_auto(unique_domain, dcsync_file_lines)
+                if resolved_pairs == "PARTIAL":
+                    replace_dcsync_domain_user_specific(resolved_pairs, dcsync_file_lines)
             # If auto-resolve failed, prompt the user
             if new_domain == "":
                 try:
@@ -571,44 +573,78 @@ def domain_change_auto(old_domain, dcsync_file_lines):
 
     # Step 1: Extract all usernames for the unique domain
     usernames = []
-    for line in dcsync_file_lines:
-        if "\\" in line:
-            domain, rest = line.split("\\", 1)  # Split at the first occurrence of '\'
-            if domain.lower() == old_domain.lower():
-                username = rest.split(":", 1)[0]  # Extract the username before the first ':'
+    if old_domain.lower() == "NONE":
+        # When old_domain is "NONE", parse lines that do not contain a domain (no backslash)
+        for line in dcsync_file_lines:
+            if "\\" not in line:
+                username = line.split(":", 1)[0]  # Extract the username before the first ':'
                 usernames.append(username)
+    else:
+        # Otherwise, parse lines with a domain and match against old_domain
+        for line in dcsync_file_lines:
+            if "\\" in line:
+                domain, rest = line.split("\\", 1)  # Split at the first occurrence of '\'
+                if domain.lower() == old_domain.lower():
+                    username = rest.split(":", 1)[0]  # Extract the username before the first ':'
+                    usernames.append(username)
     if DEBUG_MODE:
         print(f"Found the following users for the {old_domain} domain:")
         print(usernames)
 
     if not usernames:
         print(f"No usernames found for the domain '{old_domain}' in the DCSync file. Something must have gone wrong.")
-        return ""
+        return "", {}
 
-    # Step 2: Search Neo4j for each username and collect associated domains
-    resolved_domains = set()
+    # Step 2: Query Neo4j for all users and build a mapping of username to domains
+    resolved_domains = set()  # Unique set of domains for matching users
+    resolved_pairs = {}  # Mapping of username -> domain (only if exactly one match exists)
+    query_string = "MATCH (u:User) RETURN toLower(u.domain) + '\\\\' + toLower(u.samaccountname) AS user"
+    neo4j_results = neo4j_query(query_string)
+
+    # Build a dictionary mapping username to a set of domains from Neo4j results
+    user_domain_map = {}
+    for record in neo4j_results:
+        uname = record['USERNAME']
+        dom = record['DOMAIN']
+        if uname not in user_domain_map:
+            user_domain_map[uname] = set()
+        user_domain_map[uname].add(dom)
+
+    # For each username from the DCSync file, if there's exactly one matching domain in Neo4j, record the pair
     for username in usernames:
-        query_string = f"MATCH (u:User) WHERE u.name contains toUpper('{username}') RETURN DISTINCT toLower(u.domain) + '\\\\' + toLower(u.samaccountname) AS user"
-        results = neo4j_query(query_string)
-
-        for result in results:
-            resolved_domains.add(result['DOMAIN'].lower())
+        uname = username.lower()
+        if uname in user_domain_map:
+            domains = user_domain_map[uname]
+            if len(domains) == 1:
+                resolved_pairs[uname] = list(domains)[0]
+                resolved_domains.add(list(domains)[0])
+                if DEBUG_MODE:
+                    print(f"User {uname} resolved to domain {resolved_pairs[uname]}")
+            else:
+                if DEBUG_MODE:
+                    print(f"User {uname} has multiple domains: {user_domain_map[uname]}")
+        else:
             if DEBUG_MODE:
-                print(f"User {username} found in Neo4j with domain of {result['DOMAIN'].lower()}")
+                print(f"User {uname} not found in Neo4j results")
+    resolved_domains = list(resolved_domains)  # Convert to a de-duplicated list
+    if DEBUG_MODE:
+        print(f"The following domain(s) were identified for users on the {old_domain} domain: {resolved_domains}")
 
     # Step 3: Determine if all results point to the same domain
-    if DEBUG_MODE:
-        print(f"When searching DCSync users with {old_domain} domain, the following domains were found: {resolved_domains}")
     if len(resolved_domains) == 1:
-        # If there was just one domain returned, it successfully figured out the matching domain automatically
+        # If there was just one domain returned, it successfully figured out the matching domain automatically and can just go fix them
         resolved_domain = resolved_domains.pop()
-        return resolved_domain
+        return resolved_domain, {}
     elif len(resolved_domains) == 0:
         print(f"No matching domains found in Neo4j for users under '{old_domain}'.")
-        return ""
+        return "", {}
     else:
-        print(f"Failed to automatically resolve domain '{old_domain}'")
-        return ""
+        if list(resolved_pairs): # If there was more than one domain, but some users had just one domain, fix those at least
+            print(f"Only able to fix some users automatically on the {old_domain} domain")
+            return "PARTIAL", resolved_pairs
+        else:
+            print(f"Failed to automatically resolve domain '{old_domain}'")
+            return "", {}
 
 def replace_dcsync_domain(old_domain, new_domain, dcsync_file_lines):
     print(f"Updating {old_domain} domain in DCSync to {new_domain}")
@@ -621,6 +657,33 @@ def replace_dcsync_domain(old_domain, new_domain, dcsync_file_lines):
 
     return dcsync_file_lines
 
+def replace_dcsync_domain_user_specific(resolved_pairs, dcsync_file_lines):
+    print("Updating specific users in DCSync file using auto resolved domain.")
+    if DEBUG_MODE:
+        print(f"Resolved pairs: {resolved_pairs}")
+
+    for i, line in enumerate(dcsync_file_lines):
+        if "\\" in line:
+            domain, rest = line.split("\\", 1)  # Split at the first occurrence of '\'
+            username = rest.split(":", 1)[0].strip().lower()  # Extract username before the first ':'
+            if username in resolved_pairs:
+                new_domain = resolved_pairs[username]
+                old_line = dcsync_file_lines[i]
+                dcsync_file_lines[i] = f"{new_domain}\\{rest}"
+                if DEBUG_MODE:
+                    print(f"Updated line: {old_line} -> {dcsync_file_lines[i]}")
+        else:
+            # No domain present; extract username and prepend the resolved domain if available.
+            username = line.split(":", 1)[0].strip().lower()
+            if username in resolved_pairs:
+                new_domain = resolved_pairs[username]
+                old_line = dcsync_file_lines[i]
+                dcsync_file_lines[i] = f"{new_domain}\\{line}"
+                if DEBUG_MODE:
+                    print(f"Updated line (no domain): {old_line} -> {dcsync_file_lines[i]}")
+    return dcsync_file_lines
+
+
 
 def create_user_database(dcsync_file_lines, cleartext_creds, admin_users, enabled_users, kerberoastable_users, password_file_lines):
     user_database = []
@@ -631,10 +694,13 @@ def create_user_database(dcsync_file_lines, cleartext_creds, admin_users, enable
         # Split the line into its components (assuming the format: DOMAIN\USERNAME:RID:LMHASH:NTHASH:::)
         try:
             domain_user, rid, lmhash, nthash, *_ = line.split(':')  # Extract and discard RID
-            domain, username = domain_user.split('\\')
+            if '\\' in domain_user:
+                domain, username = domain_user.split('\\', 1)
+            else:
+                domain = "NONE"
+                username = domain_user
         except ValueError:
-            # Handle improperly formatted lines
-            skipped_lines.append(f"Skipping processing for invalid line in dcsync. Likely no domain or other format issue: {line}")
+            skipped_lines.append(f"Skipping processing for invalid line in dcsync: {line}")
             continue
 
         # Determine derived attributes
@@ -1574,41 +1640,32 @@ def neo4j_query(query_string):
 def emails_from_neo4j(user_database):
     try:
         with GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USERNAME, NEO4J_PASSWORD)) as driver:
-            with driver.session() as session:  # Open a single session for the entire operation
-                for user in user_database:
-                    if user.domain:  # If domain is provided, include it in the query
-                        query = (
-                            "MATCH (u:User) "
-                            "WHERE toUpper(u.samaccountname) = $username "
-                            "AND toUpper(u.domain) = $domain "
-                            "RETURN u.email"
-                        )
-                        parameters = {
-                            "username": user.username.upper(),
-                            "domain": user.domain.upper()
-                        }
-                    else:  # If no domain, search by username only
-                        query = (
-                            "MATCH (u:User) "
-                            "WHERE toUpper(u.samaccountname) = $username "
-                            "RETURN u.email"
-                        )
-                        parameters = {
-                            "username": user.username.upper()
-                        }
+            with driver.session() as session:
+                # Run one big query to fetch all user email info from Neo4j
+                query = (
+                    "MATCH (u:User) "
+                    "RETURN toUpper(u.samaccountname) AS username, "
+                    "toUpper(u.domain) AS domain, "
+                    "u.email AS email"
+                )
+                results = session.run(query)
+                # Build a mapping: (username, domain) -> email
+                user_email_map = {}
+                for record in results:
+                    uname = record["username"]
+                    dom = record["domain"] if record["domain"] is not None else "NONE"
+                    email = record["email"]
+                    user_email_map[(uname, dom)] = email
 
-                    result = session.run(query, parameters)
-                    email = None
-                    for record in result:
-                        email = record["u.email"]
-                        break  # Retrieve the first email match and exit the loop
-                    user.email = email if email else None  # Assign email or None if not found
+                # Update each user in the database using the mapping
+                for user in user_database:
+                    uname = user.username.upper()
+                    dom = user.domain.upper() if user.domain else "NONE"
+                    user.email = user_email_map.get((uname, dom), None)
             return user_database
     except Exception as e:
         print(f"ERROR: Neo4j query failed, unable to pull user emails - {e}")
         return user_database
-
-
 
 
 def testNeo4jConnectivity():
