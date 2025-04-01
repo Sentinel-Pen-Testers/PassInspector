@@ -3,7 +3,7 @@ PassInspector is built to parse through a list of cracked passwords to identify 
 
 If Neo4j credentials are supplied (recommended), PassInspector can automatically pull the following from the BloodHound data:
 * Enabled users
-* Administrative users (from "Administrators", "Domain Admins", and "Enterprise Admins" groups)
+* Administrative users
 * Kerberoastable users
 
 ## Features
