@@ -14,9 +14,9 @@ from tqdm import tqdm
 
 NEO4J_PASSWORD = "bloodhoundcommunityedition"
 NEO4J_QUERIES = {
-    "admins": "MATCH (u:User)-[:MemberOf]->(g:Group) WHERE toUpper(g.name) CONTAINS 'DOMAIN ADMINS' OR "
-              "g.name CONTAINS 'ENTERPRISE ADMINS' OR g.name STARTS WITH 'ADMINISTRATORS@' RETURN "
-              "DISTINCT toLower(u.domain) + '\\\\' + toLower(u.samaccountname) AS user",
+    "admins": "MATCH (u:User)-[:MemberOf*1..]->(g:Group) "
+               "WHERE g.objectid ENDS WITH '-512' OR g.objectid ENDS WITH '-519' OR g.objectid ENDS WITH '-544' "
+               "RETURN DISTINCT toLower(u.domain) + '\\\\' + toLower(u.samaccountname) AS user",
     "enabled": "MATCH (u:User) WHERE u.enabled=true RETURN tolower(u.domain) + '\\\\' + "
                "tolower(u.samaccountname) AS user",
     "kerberoastable": "MATCH (u:User)WHERE u.hasspn=true RETURN tolower(u.domain) + '\\\\' + "
@@ -1899,7 +1899,7 @@ if __name__ == '__main__':
 
     # Add the optional -c flag for comma-separated custom passwords to search for
     parser.add_argument('-c', '--custom', help='(OPTIONAL) Comma-separated terms you would like searched '
-                                               'for, such as the organization\'s name or acronym in lowercase')
+                                               'for in passwords, such as the organization\'s name or acronym in lowercase')
 
     # Add the optional -cs flag for colon-separated credential stuffing file to override or replace BreachCreds results
     parser.add_argument('-cs', '--cred-stuffing', help='(OPTIONAL) Only required if BreachCreds.py is not '
@@ -1912,7 +1912,7 @@ if __name__ == '__main__':
                                                'for credential stuffing credentials')
 
     # Add the -d flag for the DCSync file
-    parser.add_argument('-d', '--dcsync', help='(OPTIONAL) A file containing the output of a DCSync in the '
+    parser.add_argument('-d', '--dcsync', help='(REQUIRED) A file containing the output of a DCSync in the '
                                                'format of DOMAIN\\USER:RID:LMHASH:NTHASH:::')
 
     parser.add_argument('-db', '--debug', help='(OPTIONAL) Turn on debug messages', action='store_true')
@@ -1928,7 +1928,7 @@ if __name__ == '__main__':
                                                 'NEO4J CSV files are also accepted. Overrides automatic Neo4j queries.')
 
     parser.add_argument('-fp', '--file-prefix', help='(OPTIONAL) File output prefix (if none is provided,'
-                                                     'datetime will be used instead.')
+                                                     'datetime will be used instead.)')
 
     parser.add_argument('-k', '--kerberoastable-users', help='(OPTIONAL) A file containing all of the '
                                                              'Kerberoastable users. Overrides automatic Neo4j queries.')
@@ -1948,7 +1948,7 @@ if __name__ == '__main__':
                                                         'Must be specified for automatic queries to be attempted')
 
     # Add the -p flag for a file containing cracked passwords
-    parser.add_argument('-p', '--passwords', help='(OPTIONAL) A file containing all of the cracked '
+    parser.add_argument('-p', '--passwords', help='(REQUIRED) A file containing all of the cracked '
                                                   'passwords from Hashtopolis in the form of NTHASH:PASSWORD')
 
     parser.add_argument('-ph', '--prepare-hashes',
