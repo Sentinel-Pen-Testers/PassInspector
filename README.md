@@ -53,17 +53,15 @@ PassInspector generates three output files:
 * Excel Report – An .xlsx file with various columns for manual investigation.
 
 ## Installation
-`git clone https://github.com/Sentinel-Pen-Testers/PassInspector`
-
-`cd PassInspector`
-
-`virtualenv -p python3 venv-passinspector`
-
-`source venv-passinspector/bin/activate`
-
-`pip install -r requirements.txt`
-
-`python3 PassInspector.py`
+### Pipx Installation
+`pipx install git+https://github.com/Sentinel-Pen-Testers/PassInspector`
+### Manual Installation
+1. `git clone https://github.com/Sentinel-Pen-Testers/PassInspector`
+2. `cd PassInspector`
+3. `virtualenv -p python3 venv-passinspector`
+4. `source venv-passinspector/bin/activate`
+5. `pip install -r requirements.txt`
+6. `python3 passinspector/passinspector.py`
 
 ## To do
 
