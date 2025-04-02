@@ -20,4 +20,4 @@ dependencies = [
 requires-python = ">=3.7"
 
 [project.scripts]
-passinspector = "passinspector:main"
+passinspector = "passinspector.passinspector:main"
