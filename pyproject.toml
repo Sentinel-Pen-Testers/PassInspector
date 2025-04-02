@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "passinspector"
+version = "1.0.0"
+description = "PassInspector is built to parse through a list of cracked passwords to identify patterns that could indicate a weak password policy. This script is intended to be used on passwords that have been cracked from the domain's NTDS.dit file using something like a DCSync attack."
+authors = [
+    { name = "Troy Wilson" },
+    { name = "Luke Lauterbach" }
+]
+dependencies = [
+    "xlsxwriter",
+    "neo4j",
+    "requests",
+    "windows-curses; platform_system == 'Windows'",  # Fixed missing comma
+    "tqdm"
+]
+requires-python = ">=3.7"
+
+[project.scripts]
+passinspector = "passinspector.passinspector:main"

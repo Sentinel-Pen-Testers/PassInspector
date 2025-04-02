@@ -1879,7 +1879,7 @@ def list_files_recursive(directory='.'):
     return files_list
 
 
-if __name__ == '__main__':
+def main():
     script_version = 2.5
     print("\n==============================")
     print("PassInspector  -  Version", script_version)
@@ -2017,3 +2017,7 @@ if __name__ == '__main__':
     central_station(search_terms, args.admins, args.enabled, dcsync_filename, passwords_filename, args.students,
                     spray_users_filename, spray_passwords_filename, args.cred_stuffing, args.cred_stuffing_domains,
                     args.kerberoastable_users, duplicate_password_identifier, file_prefix, args.local_hashes, search_dehashed)
+
+
+if __name__ == '__main__':
+    main()
