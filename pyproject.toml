@@ -7,7 +7,7 @@ name = "passinspector"
 version = "1.0.0"
 description = "PassInspector is built to parse through a list of cracked passwords to identify patterns that could indicate a weak password policy. This script is intended to be used on passwords that have been cracked from the domain's NTDS.dit file using something like a DCSync attack."
 authors = [
-    { name = "RapidWolf95" },
+    { name = "Troy Wilson" },
     { name = "Luke Lauterbach" }
 ]
 dependencies = [
