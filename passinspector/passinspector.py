@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-import argparse
 import binascii
 import datetime
 import json
@@ -7,16 +6,16 @@ from neo4j import GraphDatabase
 import os
 import re
 import sys
-import xlsxwriter
 from tqdm import tqdm
+import utils
+import export_xlsx
 
-"""This script is created to parse through cracked passwords to find weak patterns that can be added to the report."""
-
+DEBUG_MODE = False
 NEO4J_PASSWORD = "bloodhoundcommunityedition"
 NEO4J_QUERIES = {
     "admins": "MATCH (u:User)-[:MemberOf*1..]->(g:Group) "
-               "WHERE g.objectid ENDS WITH '-512' OR g.objectid ENDS WITH '-519' OR g.objectid ENDS WITH '-544' "
-               "RETURN DISTINCT toLower(u.domain) + '\\\\' + toLower(u.samaccountname) AS user",
+              "WHERE g.objectid ENDS WITH '-512' OR g.objectid ENDS WITH '-519' OR g.objectid ENDS WITH '-544' "
+              "RETURN DISTINCT toLower(u.domain) + '\\\\' + toLower(u.samaccountname) AS user",
     "enabled": "MATCH (u:User) WHERE u.enabled=true RETURN tolower(u.domain) + '\\\\' + "
                "tolower(u.samaccountname) AS user",
     "kerberoastable": "MATCH (u:User)WHERE u.hasspn=true RETURN tolower(u.domain) + '\\\\' + "
@@ -24,9 +23,11 @@ NEO4J_QUERIES = {
 NEO4J_URI = f"neo4j://localhost"
 NEO4J_USERNAME = "neo4j"
 
+
 class User:
     def __init__(self, domain, username, lmhash, nthash, password, cracked, has_lm,
-                 blank_password, enabled, is_admin, kerberoastable, student, local_pass_repeat, pass_repeat, email, spray_user, spray_password):
+                 blank_password, enabled, is_admin, kerberoastable, student, local_pass_repeat, pass_repeat, email,
+                 spray_user, spray_password):
         self.domain = domain
         self.username = username
         self.lmhash = lmhash
@@ -45,28 +46,73 @@ class User:
         self.spray_user = spray_user
         self.spray_password = spray_password
 
+    def fix_password(self):
+        """Fixes a password if it is in HEX format."""
+        if "$HEX[" in self.password:
+            try:
+                self.password = dehexify(self.password)
+            except Exception as e:
+                print(f"Failed to dehexify password for {self.username}: {e}")
 
 
-def central_station(search_terms, admin_users, enabled_users, dcsync_filename, passwords_filename, students_filename,
-                    spray_users_filename, spray_passwords_filename, cred_stuffing_filename, cred_stuffing_domains,
-                    kerberoastable_users, duplicate_password_identifier, file_datetime, local_hash_filename, search_dehashed):
+def main(dcsync_filename="", passwords_filename="", file_prefix="", prepare_hashes_mode=False, custom="",
+                    cred_stuffing_domains=False, neo4j_hostname="", neo4j_username="", neo4j_password="",
+                    no_dehashed=False, spray_users_filename="", spray_passwords_filename="", students_filename="",
+                    local_hash_filename="", cred_stuffing_filename="", admins_filename="", enabled_users_filename="",
+                    kerberoastable_filename="", duplicate_password_identifier=False):
+    script_version = 2.5
+    print("\n==============================")
+    print("PassInspector  -  Version", script_version)
+    print("==============================\n")
+
+    # If the script was manually run, grab the command line arguments
+    if not dcsync_filename:
+        (dcsync_filename, passwords_filename, spray_users_filename, spray_passwords_filename,
+         duplicate_password_identifier, no_dehashed, cred_stuffing_domains, prepare_hashes_mode, custom,
+         neo4j_hostname, neo4j_username, neo4j_password, students_filename, local_hash_filename,
+         cred_stuffing_filename, admins_filename, enabled_users_filename, kerberoastable_filename) = utils.gather_arguments()
+    # Handle user error in the provided variables
+    cred_stuffing_domains, search_terms = utils.parse_arguments(cred_stuffing_domains, custom)
+
+    # Handle situation where no arguments were provided.
+    if not dcsync_filename or not passwords_filename:
+        file_prefix = input('No arguments provided for DCSync or cracked password file. '
+                            'What is the file prefix for these files? ')
+        file_prefix = file_prefix.strip()
+
+    # Parse Neo4j arguments, if provided
+    if neo4j_hostname:
+        global NEO4J_URI
+        NEO4J_URI = f"neo4j://{neo4j_hostname}"
+    if neo4j_username:
+        global NEO4J_USERNAME
+        NEO4J_USERNAME = neo4j_username
+    if neo4j_username:
+        global NEO4J_PASSWORD
+        NEO4J_PASSWORD = neo4j_password
+
+    # Test Neo4j connectivity, and if it fails, set the password to blank so the script doesn't try to connect later
+    if not testNeo4jConnectivity():
+        NEO4J_PASSWORD = ""
+
     # Designed to figure out what actions will need to take place depending on the file types provided
-    file_datetime, dcsync_filename, passwords_filename = get_filenames(file_datetime, dcsync_filename, passwords_filename)
+    file_datetime, dcsync_filename, passwords_filename = get_filenames(file_prefix, dcsync_filename,
+                                                                       passwords_filename)
     dcsync_results = []  # All results and values
     user_database_cracked = []  # Values for any cracked user credential
 
-    dcsync_file_lines = open_file(dcsync_filename)
+    dcsync_file_lines = utils.open_file(dcsync_filename)
     dcsync_file_lines, cleartext_creds = filter_dcsync_file(dcsync_file_lines)
 
-    password_file_lines = open_file(passwords_filename)
+    password_file_lines = utils.open_file(passwords_filename)
     password_file_lines = deduplicate_passwords(password_file_lines)
 
-    cred_stuffing_accounts = get_cred_stuffing(cred_stuffing_filename, cred_stuffing_domains, search_dehashed)
+    cred_stuffing_accounts = get_cred_stuffing(cred_stuffing_filename, cred_stuffing_domains, no_dehashed)
 
     # Take users from a file, otherwise query neo4j if info was provided, otherwise just assign a blank value
-    admin_users = group_lookup("admins", admin_users)
-    enabled_users = group_lookup("enabled", enabled_users)
-    kerberoastable_users = group_lookup("kerberoastable", kerberoastable_users)
+    admin_users = group_lookup("admins", admins_filename)
+    enabled_users = group_lookup("enabled", enabled_users_filename)
+    kerberoastable_users = group_lookup("kerberoastable", kerberoastable_filename)
 
     # Check on the domains that were found to make sure they match
     dcsync_file_lines, admin_users, enabled_users, kerberoastable_users = check_domains(dcsync_file_lines, admin_users,
@@ -77,7 +123,7 @@ def central_station(search_terms, admin_users, enabled_users, dcsync_filename, p
     user_database = create_user_database(dcsync_file_lines, cleartext_creds, admin_users, enabled_users,
                                          kerberoastable_users, password_file_lines)
 
-    user_database = fix_bad_passwords(user_database)
+    user_database = utils.fix_bad_passwords(user_database)
     if cleartext_creds:
         user_database = add_cleartext_creds(user_database, cleartext_creds)
     if students_filename:
@@ -89,7 +135,6 @@ def central_station(search_terms, admin_users, enabled_users, dcsync_filename, p
         if user.cracked:
             user_database_cracked.append(user)
 
-    print("Calculating statistics")
     # Create a progress bar with eight steps
     pbar = tqdm(total=8, desc="Calculating statistics", ncols=100)
     # Step 1: Calculate password lengths for enabled and all users
@@ -127,22 +172,20 @@ def central_station(search_terms, admin_users, enabled_users, dcsync_filename, p
     if duplicate_password_identifier:
         user_database = calc_duplicate_password_identifier(user_database)
 
-    printed_stats = show_results(stat_enabled_shortest, stat_enabled_longest, stat_all_shortest, stat_all_longest, text_blank_passwords, text_terms, text_seasons, text_keyboard_walks,
-                 text_custom_search, text_username_passwords, text_admin_pass_reuse, text_lm_hashes, text_cred_stuffing, num_spray_matches,
-                 num_pass_spray_matches, user_database)
+    printed_stats = show_results(stat_enabled_shortest, stat_enabled_longest, stat_all_shortest, stat_all_longest,
+                                 text_blank_passwords, text_terms, text_seasons, text_keyboard_walks,
+                                 text_custom_search, text_username_passwords, text_admin_pass_reuse, text_lm_hashes,
+                                 text_cred_stuffing, num_spray_matches,
+                                 num_pass_spray_matches, user_database)
 
     print("Writing out files")
-    write_cracked_file(printed_stats, file_datetime, user_database, result_enabled_shortest_passwords, result_enabled_longest_passwords, result_all_shortest_passwords, result_all_longest_passwords,
+    write_cracked_file(printed_stats, file_datetime, user_database, result_enabled_shortest_passwords,
+                       result_enabled_longest_passwords, result_all_shortest_passwords, result_all_longest_passwords,
                        result_blank_passwords, result_common_terms, result_seasons, result_keyboard_walks,
-                       result_custom_search, result_username_passwords, results_admin_pass_reuse, result_lm_hash_users, result_blank_enabled, result_cred_stuffing)
-    write_xlsx(file_datetime, user_database)
+                       result_custom_search, result_username_passwords, results_admin_pass_reuse, result_lm_hash_users,
+                       result_blank_enabled, result_cred_stuffing)
+    export_xlsx.write_xlsx(file_datetime, user_database)
     print("Done!")
-
-
-def print_and_log(message, log):
-    print(message)
-    log = message + "\n"
-    return log
 
 
 def group_lookup(query, group_filename):
@@ -154,31 +197,6 @@ def group_lookup(query, group_filename):
         group = []
 
     return group
-
-
-def fix_bad_passwords(user_database):
-    for user in user_database:
-        if '$HEX[' in user.password:
-            try:
-                user.password = dehexify(user.password)
-            except Exception as e:
-                print(f"Failed to dehexify password for {user.username} with password {user.password}: {e}")
-
-    return user_database
-
-
-def open_file(l_filename):
-    print(f"Opening {l_filename}")
-    lines = []
-    try:
-        with open(l_filename, 'r') as file:
-            for line in file:
-                if line:
-                    lines.append(line.strip())
-    except FileNotFoundError:
-        print(f"ERROR: Could not find file using the filename provided: {l_filename}")
-        exit(1)
-    return lines
 
 
 def check_if_spray(user_database, spray_users_filename, spray_passwords_filename):
@@ -261,92 +279,6 @@ def check_if_spray(user_database, spray_users_filename, spray_passwords_filename
         print("No spray password file supplied. Cannot calculate stats.")
 
     return user_database, num_spray_matches, num_pass_spray_matches
-
-
-
-def write_xlsx(file_date, user_database):
-    out_filename = f"passinspector_results_{file_date}.xlsx"
-    print(f"Writing results in Excel format to {out_filename}")
-    # Create Workbook
-    workbook = xlsxwriter.Workbook(out_filename)
-    worksheet = workbook.add_worksheet()
-    cell_format = workbook.add_format()
-    cell_format.set_align('top')
-    cell_format.set_align('left')
-    # cell_format.set_font_name('Barlow')  # If we pasted data into the report, this would help.
-    cell_format.set_font_size('10')
-    header_format = workbook.add_format()
-    header_format.set_align('top')
-    header_format.set_align('left')
-    header_format.set_font_name('Barlow')
-    header_format.set_font_size('11')
-    header_format.set_bg_color('#D9D9D9')
-
-    # Define headers
-    headers = [
-        'DOMAIN', 'USERNAME', 'LMHASH', 'NTHASH', 'PASSWORD', 'CRACKED', 'HAS_LM',
-        'BLANK_PASSWORD', 'ENABLED', 'IS_ADMIN', 'KERBEROASTABLE', 'STUDENT',
-        'LOCAL_PASS_REPEAT', 'PASS_REPEAT_COUNT', 'SPRAY_USER', 'SPRAY_PASSWORD', 'EMAIL'
-    ]
-    worksheet.freeze_panes(1, 0)  # Freeze the top row
-
-    # Write headers to the first row
-    for col_count, header in enumerate(headers):
-        worksheet.write(0, col_count, header, header_format)
-
-    # Prepare the data for writing and track column widths
-    column_widths = [len(header) for header in headers]
-    data = []
-    hide_columns = {'LMHASH', 'NTHASH'}  # Columns to hide initially
-    conditional_hide_columns = {'ENABLED', 'IS_ADMIN', 'KERBEROASTABLE', 'STUDENT', 'LOCAL_PASS_REPEAT', 'SPRAY_USER', 'SPRAY_PASSWORD', 'EMAIL'}
-    conditional_false_counts = {key: 0 for key in conditional_hide_columns}
-    total_rows = len(user_database)
-
-    for user in user_database:
-        values = [
-            user.domain,
-            user.username,
-            user.lmhash,
-            user.nthash,
-            user.password if user.password else "",
-            "True" if user.cracked else "False",
-            "True" if user.has_lm else "False",
-            "True" if user.blank_password else "False",
-            "True" if user.enabled else "False",
-            "True" if user.is_admin else "False",
-            "True" if user.kerberoastable else "False",
-            "True" if user.student else "False",
-            user.local_pass_repeat,
-            user.pass_repeat,
-            user.spray_user,
-            user.spray_password,
-            user.email
-        ]
-        data.append(values)
-
-        # Update column widths and count "False" values for conditional columns
-        for col_index, value in enumerate(values):
-            column_widths[col_index] = max(column_widths[col_index], len(str(value)))
-            if headers[col_index] in conditional_hide_columns and value == "False":
-                conditional_false_counts[headers[col_index]] += 1
-
-    # Write data rows
-    for row_index, row in enumerate(data, start=1):
-        for col_index, value in enumerate(row):
-            worksheet.write(row_index, col_index, value, cell_format)
-
-    # Adjust column widths
-    for col_index, width in enumerate(column_widths):
-        worksheet.set_column(col_index, col_index, width)
-
-    # Hide specified columns
-    for col_index, header in enumerate(headers):
-        if header in hide_columns or (header in conditional_hide_columns and conditional_false_counts[header] == total_rows):
-            worksheet.set_column(col_index, col_index, None, None, {'hidden': True})
-
-    worksheet.autofilter(0, 0, len(user_database), len(headers) - 1)  # Allow the headers to be filtered
-    workbook.close()
-
 
 
 def read_json_file(file_path):
@@ -504,6 +436,7 @@ def domain_change_cli(unique_domain, no_match_text, domain_choices):
     new_domain = new_domain.lower().strip()
     return new_domain
 
+
 def domain_change_tui(stdscr, unique_domain, no_match_text, domain_choices):
     import curses
     selection_mode = True
@@ -552,6 +485,7 @@ def domain_change_tui(stdscr, unique_domain, no_match_text, domain_choices):
         new_domain = ""
     return new_domain
 
+
 def replace_imported_domain(old_domain, new_domain, admin_users, enabled_users, kerberoastable_users):
     print(f"Updating {old_domain} domain in imported data to {new_domain}")
 
@@ -565,6 +499,7 @@ def replace_imported_domain(old_domain, new_domain, admin_users, enabled_users, 
         if user['DOMAIN'].lower() == old_domain:
             user['DOMAIN'] = new_domain
     return admin_users, enabled_users, kerberoastable_users
+
 
 def domain_change_auto(old_domain, dcsync_file_lines):
     # This function checks all users matching a unique domain to see if they appear in Neo4j
@@ -639,12 +574,13 @@ def domain_change_auto(old_domain, dcsync_file_lines):
         print(f"No matching domains found in Neo4j for users under '{old_domain}'.")
         return "", {}
     else:
-        if list(resolved_pairs): # If there was more than one domain, but some users had just one domain, fix those at least
+        if list(resolved_pairs):  # If there was more than one domain, but some users had just one domain, fix those at least
             print(f"Only able to fix some users automatically on the {old_domain} domain")
             return "PARTIAL", resolved_pairs
         else:
             print(f"Failed to automatically resolve domain '{old_domain}'")
             return "", {}
+
 
 def replace_dcsync_domain(old_domain, new_domain, dcsync_file_lines):
     print(f"Updating {old_domain} domain in DCSync to {new_domain}")
@@ -656,6 +592,7 @@ def replace_dcsync_domain(old_domain, new_domain, dcsync_file_lines):
                 dcsync_file_lines[i] = f"{new_domain}\\{rest}"
 
     return dcsync_file_lines
+
 
 def replace_dcsync_domain_user_specific(resolved_pairs, dcsync_file_lines):
     print("Updating specific users in DCSync file using auto resolved domain.")
@@ -684,8 +621,8 @@ def replace_dcsync_domain_user_specific(resolved_pairs, dcsync_file_lines):
     return dcsync_file_lines
 
 
-
-def create_user_database(dcsync_file_lines, cleartext_creds, admin_users, enabled_users, kerberoastable_users, password_file_lines):
+def create_user_database(dcsync_file_lines, cleartext_creds, admin_users, enabled_users, kerberoastable_users,
+                         password_file_lines):
     user_database = []
     skipped_lines = []
 
@@ -839,7 +776,8 @@ def calculate_password_long_short(user_database):
     all_users = user_database
 
     # Calculate for enabled users
-    enabled_shortest, enabled_longest, enabled_shortest_passwords, enabled_longest_passwords = find_password_lengths(enabled_users)
+    enabled_shortest, enabled_longest, enabled_shortest_passwords, enabled_longest_passwords = find_password_lengths(
+        enabled_users)
 
     # Calculate for all users
     all_shortest, all_longest, all_shortest_passwords, all_longest_passwords = find_password_lengths(all_users)
@@ -908,10 +846,11 @@ def perform_password_search(user_database_cracked, search_terms):
             counts["blank_passwords"] += 1
             result_blank_passwords.append(user)
             if user.enabled:
-              enabled_counts["blank_passwords"] += 1
+                enabled_counts["blank_passwords"] += 1
 
     if counts["blank_passwords"] > 0:
-        stats["blank_passwords"] = f"There were {counts['blank_passwords']} account(s) found with blank passwords. {enabled_counts['blank_passwords']} of these belonged to enabled users."
+        stats[
+            "blank_passwords"] = f"There were {counts['blank_passwords']} account(s) found with blank passwords. {enabled_counts['blank_passwords']} of these belonged to enabled users."
 
     # Common terms
     counts["terms"], leet_text, result_common_terms = inner_search(common_terms, user_database_cracked)
@@ -928,7 +867,8 @@ def perform_password_search(user_database_cracked, search_terms):
                             f"(Spring, Summer, Fall, Autumn, Winter){leet_text}. {enabled_counts['seasons']} of these belonged to enabled users.")
 
     # Keyboard walks
-    counts["keyboard_walks"], leet_text, result_keyboard_walks = inner_search(common_keyboard_walks, user_database_cracked)
+    counts["keyboard_walks"], leet_text, result_keyboard_walks = inner_search(common_keyboard_walks,
+                                                                              user_database_cracked)
     enabled_counts["keyboard_walks"] = sum(1 for user in result_keyboard_walks if user.enabled)
     if counts["keyboard_walks"] > 0:
         stats["keyboard_walks"] = (f"There were {counts['keyboard_walks']} password(s) found to be keyboard walks, "
@@ -1049,6 +989,7 @@ def lm_hash_inspection(user_database):
 
     return text_results, lm_hash_users
 
+
 def blank_enabled_search(user_database, text_blank_passwords):
     # Returns additional text for the blank password line and user accounts with blank passwords
     blank_enabled_users = []
@@ -1064,6 +1005,7 @@ def blank_enabled_search(user_database, text_blank_passwords):
 
     return text_blank_passwords, blank_enabled_users
 
+
 def cred_stuffing_check(cred_stuffing_accounts, user_database):
     cred_stuffing_matches = []
     text_results = ""
@@ -1078,8 +1020,9 @@ def cred_stuffing_check(cred_stuffing_accounts, user_database):
                     enabled_matches_count += 1
 
     if len(cred_stuffing_matches) > 0:
-        text_results = (f"There were {len(cred_stuffing_matches)} valid credential stuffing password(s) found to be valid. "
-                        f"{enabled_matches_count} of these accounts were enabled.")
+        text_results = (
+            f"There were {len(cred_stuffing_matches)} valid credential stuffing password(s) found to be valid. "
+            f"{enabled_matches_count} of these accounts were enabled.")
 
     return text_results, cred_stuffing_matches
 
@@ -1192,8 +1135,10 @@ def calculate_cracked(user_database):
             len(user_database), all_crack_percent)
 
 
-def show_results(stat_enabled_shortest, stat_enabled_longest, stat_all_shortest, stat_all_longest, text_blank_passwords, text_terms, text_seasons, text_keyboard_walks,
-                 text_custom_search, text_username_passwords, text_admin_pass_reuse, text_lm_hashes, text_cred_stuffing, stat_spray_matches,
+def show_results(stat_enabled_shortest, stat_enabled_longest, stat_all_shortest, stat_all_longest, text_blank_passwords,
+                 text_terms, text_seasons, text_keyboard_walks,
+                 text_custom_search, text_username_passwords, text_admin_pass_reuse, text_lm_hashes, text_cred_stuffing,
+                 stat_spray_matches,
                  stat_spray_pass_matches, user_database):
     da_cracked, da_total = calc_da_cracked(user_database)
     stat_total_uniq, uniq_cracked_percent, stat_cracked_uniq = calculate_unique_hashes(user_database)
@@ -1210,43 +1155,55 @@ def show_results(stat_enabled_shortest, stat_enabled_longest, stat_all_shortest,
     print("=============================")
     print("========== RESULTS ==========")
     print("=============================")
-    results_text += print_and_log(f"Unique passwords cracked: {stat_cracked_uniq}/{stat_total_uniq} {uniq_cracked_percent}", results_text)
-    results_text += print_and_log(f"Total accounts cracked: {all_cracked}/{all_total} {all_crack_percent}", results_text)
-    results_text += print_and_log(f"Enabled employee accounts cracked: {enabled_cracked}/{enabled_total} {enabled_crack_percent}", results_text)
+    results_text += utils.print_and_log(
+        f"Unique passwords cracked: {stat_cracked_uniq}/{stat_total_uniq} {uniq_cracked_percent}", results_text)
+    results_text += utils.print_and_log(f"Total accounts cracked: {all_cracked}/{all_total} {all_crack_percent}",
+                                        results_text)
+    results_text += utils.print_and_log(
+        f"Enabled employee accounts cracked: {enabled_cracked}/{enabled_total} {enabled_crack_percent}", results_text)
     if student_cracked:
-        results_text += print_and_log(f"Total employee accounts cracked: {employee_cracked}/{employee_total} {employee_crack_percent}",
-                      results_text)
-        results_text += print_and_log(f"Student accounts cracked: {student_cracked}/{student_total} {student_crack_percent}",
-                      results_text)
+        results_text += utils.print_and_log(
+            f"Total employee accounts cracked: {employee_cracked}/{employee_total} {employee_crack_percent}",
+            results_text)
+        results_text += utils.print_and_log(
+            f"Student accounts cracked: {student_cracked}/{student_total} {student_crack_percent}",
+            results_text)
     if da_total > 0:
-        results_text += print_and_log(f"DA accounts cracked: {da_cracked}/{da_total} ({((da_cracked / da_total) * 100):.2f}%)", results_text)
-    results_text += print_and_log(f"Average employee password length: {avg_pass_len}", results_text)
-    results_text += print_and_log(f"Average enabled employee password length: {enabled_avg_pass_len}", results_text)
+        results_text += utils.print_and_log(
+            f"DA accounts cracked: {da_cracked}/{da_total} ({((da_cracked / da_total) * 100):.2f}%)", results_text)
+    results_text += utils.print_and_log(f"Average employee password length: {avg_pass_len}", results_text)
+    results_text += utils.print_and_log(f"Average enabled employee password length: {enabled_avg_pass_len}",
+                                        results_text)
     if student_avg_pass_len:
-        results_text += print_and_log(f"Student average password length: {student_avg_pass_len}", results_text)
-    results_text += print_and_log(f"Shortest password length (not counting blank passwords): {stat_all_shortest}", results_text)
-    results_text += print_and_log(f"Shortest password length for an enabled account (not counting blank passwords): {stat_enabled_shortest}",
-                                  results_text)
-    results_text += print_and_log(f"Longest password length: {stat_all_longest}", results_text)
-    results_text += print_and_log(f"Longest password length for an enabled account: {stat_enabled_longest}", results_text)
-    results_text += print_and_log(text_blank_passwords, results_text) if text_blank_passwords else ""
+        results_text += utils.print_and_log(f"Student average password length: {student_avg_pass_len}", results_text)
+    results_text += utils.print_and_log(f"Shortest password length (not counting blank passwords): {stat_all_shortest}",
+                                        results_text)
+    results_text += utils.print_and_log(
+        f"Shortest password length for an enabled account (not counting blank passwords): {stat_enabled_shortest}",
+        results_text)
+    results_text += utils.print_and_log(f"Longest password length: {stat_all_longest}", results_text)
+    results_text += utils.print_and_log(f"Longest password length for an enabled account: {stat_enabled_longest}",
+                                        results_text)
+    results_text += utils.print_and_log(text_blank_passwords, results_text) if text_blank_passwords else ""
     local_pass_repeated = count_local_hash(user_database)
     if local_pass_repeated > 0:
-        results_text += print_and_log(f"There {'were' if local_pass_repeated > 1 else 'was'} "
-                                      f"{local_pass_repeated} account{'s' if local_pass_repeated > 1 else ''} found "
-                                      f"with a password hash matching a local account.", results_text)
-    results_text += print_and_log(text_terms, results_text) if text_terms else ""
-    results_text += print_and_log(text_seasons, results_text) if text_seasons else ""
-    results_text += print_and_log(text_keyboard_walks, results_text) if text_keyboard_walks else ""
-    results_text += print_and_log(text_custom_search, results_text) if text_custom_search else ""
-    results_text += print_and_log(text_username_passwords, results_text) if text_username_passwords else ""
-    results_text += print_and_log(text_admin_pass_reuse, results_text) if text_admin_pass_reuse else ""
-    results_text += print_and_log(text_lm_hashes, results_text) if text_lm_hashes else ""
-    results_text += print_and_log(text_cred_stuffing, results_text) if text_cred_stuffing else ""
+        results_text += utils.print_and_log(f"There {'were' if local_pass_repeated > 1 else 'was'} "
+                                            f"{local_pass_repeated} account{'s' if local_pass_repeated > 1 else ''} found "
+                                            f"with a password hash matching a local account.", results_text)
+    results_text += utils.print_and_log(text_terms, results_text) if text_terms else ""
+    results_text += utils.print_and_log(text_seasons, results_text) if text_seasons else ""
+    results_text += utils.print_and_log(text_keyboard_walks, results_text) if text_keyboard_walks else ""
+    results_text += utils.print_and_log(text_custom_search, results_text) if text_custom_search else ""
+    results_text += utils.print_and_log(text_username_passwords, results_text) if text_username_passwords else ""
+    results_text += utils.print_and_log(text_admin_pass_reuse, results_text) if text_admin_pass_reuse else ""
+    results_text += utils.print_and_log(text_lm_hashes, results_text) if text_lm_hashes else ""
+    results_text += utils.print_and_log(text_cred_stuffing, results_text) if text_cred_stuffing else ""
     if stat_spray_matches != 123456:
-        print_and_log(f"Number of Spray Matches (Enabled Username + Password): {stat_spray_matches}", results_text)
+        utils.print_and_log(f"Number of Spray Matches (Enabled Username + Password): {stat_spray_matches}",
+                            results_text)
     if stat_spray_pass_matches != 123456:
-        print_and_log(f"Number Enabled Accounts with Sprayable Passwords: {stat_spray_pass_matches}", results_text)
+        utils.print_and_log(f"Number Enabled Accounts with Sprayable Passwords: {stat_spray_pass_matches}",
+                            results_text)
     print("")
     print("")
     print("")
@@ -1254,9 +1211,11 @@ def show_results(stat_enabled_shortest, stat_enabled_longest, stat_all_shortest,
     return results_text
 
 
-def write_cracked_file(printed_stats, file_datetime, user_database, result_enabled_shortest_passwords, result_enabled_longest_passwords, result_all_shortest_passwords, result_all_longest_passwords,
+def write_cracked_file(printed_stats, file_datetime, user_database, result_enabled_shortest_passwords,
+                       result_enabled_longest_passwords, result_all_shortest_passwords, result_all_longest_passwords,
                        result_blank_passwords, result_common_terms, result_seasons, result_keyboard_walks,
-                       result_custom_search, result_username_passwords, results_admin_pass_reuse, result_lm_hash_users, result_blank_enabled, result_cred_stuffing):
+                       result_custom_search, result_username_passwords, results_admin_pass_reuse, result_lm_hash_users,
+                       result_blank_enabled, result_cred_stuffing):
     output_filename = f"passinspector_allcracked_{file_datetime}.txt"
     print(f"Writing all cracked passwords to {output_filename}")
     results = ["USERNAME,PASSWORD,ENABLED,ADMIN,STUDENT"]
@@ -1376,6 +1335,7 @@ def write_cracked_file(printed_stats, file_datetime, user_database, result_enabl
         for result in results:
             outfile.write(f"{result}\n")
 
+
 def parse_admin_file(l_admins_filename):
     l_admin_users = []
     try:
@@ -1438,7 +1398,6 @@ def file_to_userlist(filename=None):
         return []
 
     return users
-
 
 
 def convert_to_leetspeak(term):
@@ -1565,7 +1524,7 @@ def prepare_hashes(l_dcsync_filename, l_file_prefix):
     machine_count = 0
     ntlm_hashes = []
 
-    dcsync_lines = open_file(l_dcsync_filename)
+    dcsync_lines = utils.open_file(l_dcsync_filename)
     dcsync_lines, cleartext_hashes = filter_cleartext(dcsync_lines)
     dcsync_lines = filter_nonntlm(dcsync_lines)
     dcsync_lines = filter_machines(dcsync_lines)
@@ -1636,6 +1595,7 @@ def neo4j_query(query_string):
     except Exception as e:
         print(f"ERROR: Neo4j query failed, unable to pull users - {e}")
         return []
+
 
 def emails_from_neo4j(user_database):
     try:
@@ -1712,7 +1672,8 @@ def retrieve_cred_stuffing_results(cred_stuffing_domains):
         try:
             with GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USERNAME, NEO4J_PASSWORD)) as driver:
                 session = driver.session()
-                results = session.run("MATCH (u:User) WHERE u.email IS NOT NULL RETURN distinct(split(u.email, '@')[1]) as DOMAIN")
+                results = session.run(
+                    "MATCH (u:User) WHERE u.email IS NOT NULL RETURN distinct(split(u.email, '@')[1]) as DOMAIN")
                 domains = []
                 for result in results:
                     match = re.search(r"'([^']*)'", str(result))
@@ -1724,7 +1685,7 @@ def retrieve_cred_stuffing_results(cred_stuffing_domains):
         if domains:
             print(f"Retrieved {len(domains)} domain(s) from Neo4j, searching DeHashed (This may take some time)")
             dehashed_results = BreachCreds.main(domains, display=False, write_files=False)
-            #dehashed_results = [{'Username': 'user1@example.com'},{'Username': 'user2@example.com', 'Password': 'Password123'},{'Username': 'user3@example.com'},{'Username': 'user4@example.com', 'Password': 'Password456'}]
+            # dehashed_results = [{'Username': 'user1@example.com'},{'Username': 'user2@example.com', 'Password': 'Password123'},{'Username': 'user3@example.com'},{'Username': 'user4@example.com', 'Password': 'Password456'}]
             if dehashed_results:
                 dehashed_results_with_passwords = [entry for entry in dehashed_results if 'Password' in entry]
                 if dehashed_results_with_passwords:
@@ -1756,7 +1717,7 @@ def retrieve_cred_stuffing_results(cred_stuffing_domains):
 
 def get_cred_stuffing(cred_stuffing_filename, cred_stuffing_domains, search_dehashed):
     if cred_stuffing_filename:
-        cred_stuffing_accounts = open_file(cred_stuffing_filename)
+        cred_stuffing_accounts = utils.open_file(cred_stuffing_filename)
     elif os.path.isfile("passinspector_dehashed_results.txt"):
         cred_stuffing_accounts = import_dehashed_file()
     elif (cred_stuffing_domains or NEO4J_PASSWORD) and search_dehashed:
@@ -1781,6 +1742,7 @@ def write_dehashed_file(cred_stuffing_accounts):
         # for result in results:
         #     outfile.write(result + '\n')
 
+
 def import_dehashed_file():
     # If a local DeHashed file exists, read from that
     import_filename = f"passinspector_dehashed_results.txt"
@@ -1793,6 +1755,7 @@ def import_dehashed_file():
     file.close()
     print(f"{len(cred_stuffing_accounts)} DeHashed result(s) imported from local file")
     return cred_stuffing_accounts
+
 
 def process_hashes(hash_filename):
     with open(hash_filename) as file:
@@ -1877,146 +1840,6 @@ def list_files_recursive(directory='.'):
         for file in files:
             files_list.append(os.path.join(root, file))
     return files_list
-
-
-def main():
-    script_version = 2.5
-    print("\n==============================")
-    print("PassInspector  -  Version", script_version)
-    print("==============================\n")
-
-    # Create an argument parser
-    parser = argparse.ArgumentParser(
-        description='This script is built to search through DCSync results to help highlight weak password patterns')
-
-    # Add the optional -a flag for a list of administrative users
-    parser.add_argument('-a', '--admins', help='(OPTIONAL) A file containing a list of domain '
-                                               'administrative users. The script will check if the passwords for these '
-                                               'users are used on other accounts by using hashes. The format should be '
-                                               'DOMAIN\\USERNAME or USERNAME. BloodHound JSON files are also accepted.'
-                                               'DOMAIN\\USERNAME or USERNAME. BloodHound JSON files are also accepted. '
-                                               'Overrides automatic Neo4j queries.')
-
-    # Add the optional -c flag for comma-separated custom passwords to search for
-    parser.add_argument('-c', '--custom', help='(OPTIONAL) Comma-separated terms you would like searched '
-                                               'for in passwords, such as the organization\'s name or acronym in lowercase')
-
-    # Add the optional -cs flag for colon-separated credential stuffing file to override or replace BreachCreds results
-    parser.add_argument('-cs', '--cred-stuffing', help='(OPTIONAL) Only required if BreachCreds.py is not '
-                                                'in the same directory. Colon-separated file containing '
-                                                'credential stuffing accounts in the format of email:password')
-
-    # Add the optional -csd flag for specifying the domain to search DeHashed with if DeHashed is in the same directory
-    parser.add_argument('-csd', '--cred-stuffing-domains', help='(OPTIONAL) If BreachCreds.py is in the same '
-                                               'directory, these comma-separated domains will be used to search DeHashed '
-                                               'for credential stuffing credentials')
-
-    # Add the -d flag for the DCSync file
-    parser.add_argument('-d', '--dcsync', help='(REQUIRED) A file containing the output of a DCSync in the '
-                                               'format of DOMAIN\\USER:RID:LMHASH:NTHASH:::')
-
-    parser.add_argument('-db', '--debug', help='(OPTIONAL) Turn on debug messages', action='store_true')
-
-    parser.add_argument('-dpi', '--duplicate-password-identifier', action="store_true",
-                        help='(OPTIONAL) Add a unique identifier for each password, so the customer can identify'
-                             'password reuse without needing the passwords.')
-
-    # Add the optional -e flag for a file containing enabled users
-    parser.add_argument('-e', '--enabled', help='(OPTIONAL) A file containing a list of enabled domain '
-                                                'users. If specified, it will specify enabled users in the output. '
-                                                'The format should be DOMAIN\\USERNAME or USERNAME. BloodHound JSON or '
-                                                'NEO4J CSV files are also accepted. Overrides automatic Neo4j queries.')
-
-    parser.add_argument('-fp', '--file-prefix', help='(OPTIONAL) File output prefix (if none is provided,'
-                                                     'datetime will be used instead.)')
-
-    parser.add_argument('-k', '--kerberoastable-users', help='(OPTIONAL) A file containing all of the '
-                                                             'Kerberoastable users. Overrides automatic Neo4j queries.')
-
-    parser.add_argument('-lh', '--local-hashes', help='(OPTIONAL) A file containing LSASS dumps. The '
-                                                      'script will determine if any of the domain accounts reuse local'
-                                                      'account passwords.')
-
-    parser.add_argument('-nd', '--no-dehashed', action='store_false', help='(OPTIONAL) Skip DeHashed search')
-
-    parser.add_argument('-nh', '--neo4j-hostname', help='(OPTIONAL) Neo4j hostname or IP (Default: localhost)')
-
-    parser.add_argument('-nu', '--neo4j-username', help='(OPTIONAL) Neo4j username for automatic queries '
-                                                        '(Default: neo4j)')
-
-    parser.add_argument('-np', '--neo4j-password', help='(OPTIONAL) Neo4j password for automatic queries. '
-                                                        'Must be specified for automatic queries to be attempted')
-
-    # Add the -p flag for a file containing cracked passwords
-    parser.add_argument('-p', '--passwords', help='(REQUIRED) A file containing all of the cracked '
-                                                  'passwords from Hashtopolis in the form of NTHASH:PASSWORD')
-
-    parser.add_argument('-ph', '--prepare-hashes',
-                        action="store_true",
-                        help='(OPTIONAL) Prepare hashes for cracking on Hashtopolis. A list of unique NT hashes will be'
-                             ' output, with any accounts that have a cleartext password removed.')
-
-    parser.add_argument('-s', '--students', help='(OPTIONAL) A file containing a list of students or any '
-                                                 'other list of users. If specified, it will specify enabled users in '
-                                                 'the output. The format should be DOMAIN\\USERNAME or USERNAME. '
-                                                 'BloodHound JSON files are also accepted.')
-
-    parser.add_argument('-sp', '--spray-passwords', help='(OPTIONAL) Match cracked passwords to passwords '
-                                                         'in the spray list.')
-
-    parser.add_argument('-su', '--spray-users', help='(OPTIONAL) Match cracked users to list of usernames '
-                                                     'that will be sprayed.')
-
-    # Parse the command-line arguments
-    args = parser.parse_args()
-
-    # Handle situation where no arguments were provided.
-    if not args.file_prefix and not args.dcsync or not args.file_prefix and not args.passwords:
-        file_prefix = input('No arguments provided for DCSync or cracked password file. '
-                            'What is the file prefix for these files? ')
-        file_prefix = file_prefix.strip()
-    else:
-        file_prefix = args.file_prefix
-
-    # Access the values of the arguments
-    dcsync_filename = args.dcsync
-    passwords_filename = args.passwords
-    spray_users_filename = args.spray_users
-    spray_passwords_filename = args.spray_passwords
-    duplicate_password_identifier = args.duplicate_password_identifier
-
-    search_dehashed = args.no_dehashed
-
-    DEBUG_MODE = args.debug
-
-    # Parse Neo4j arguments if provided
-    if args.neo4j_hostname:
-        NEO4J_URI = f"neo4j://{args.neo4j_hostname}"
-    if args.neo4j_username:
-        NEO4J_USERNAME = args.neo4j_username
-    if args.neo4j_username:
-        NEO4J_PASSWORD = args.neo4j_password
-
-    # Test Neo4j connectivity, and if it fails, set the password to blank so the script doesn't try to connect later
-    if not testNeo4jConnectivity():
-        NEO4J_PASSWORD = ""
-
-    if args.custom:  # Only parse the custom passwords if they were provided
-        search_terms = args.custom.split(',')
-    else:
-        search_terms = []
-
-    if args.cred_stuffing_domains:
-        cred_stuffing_domains = args.cred_stuffing_domains.split(',')
-    else:
-        cred_stuffing_domains = []
-
-    if args.prepare_hashes:
-        prepare_hashes(dcsync_filename, file_prefix)
-
-    central_station(search_terms, args.admins, args.enabled, dcsync_filename, passwords_filename, args.students,
-                    spray_users_filename, spray_passwords_filename, args.cred_stuffing, args.cred_stuffing_domains,
-                    args.kerberoastable_users, duplicate_password_identifier, file_prefix, args.local_hashes, search_dehashed)
 
 
 if __name__ == '__main__':
