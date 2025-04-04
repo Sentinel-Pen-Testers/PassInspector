@@ -65,7 +65,9 @@ PassInspector generates three output files:
 
 ## To do
 
-* Implement better logic for finding domain administrative users rather than relying on built in groups
+* Fix file imports so none require .txt or .csv
+* Add ability to skip Neo4j checks
+* Add job titles to output Excel doc as they may be useful
 
 ## Usage
 
