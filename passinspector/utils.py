@@ -1,4 +1,65 @@
 import argparse
+import json
+from neo4j import GraphDatabase
+import re
+
+
+def fix_bad_passwords(user_database):
+    for user in user_database:
+        user.fix_password()
+    return user_database
+
+
+def check_group_member(user_database, group_members, attribute):
+    for user in user_database:
+        user.check_membership(group_members, attribute)
+    return user_database
+
+
+def file_to_userlist(filename=None):
+    if not filename:
+        return []
+    filename = filename.strip().lower()
+    if filename.endswith('.json'):  # Handle Bloodhound CE JSON exports
+        users = read_json_file(filename)
+    elif filename.endswith('.txt'):
+        users = []
+        with open(filename, 'r') as file:
+            for line in file:
+                line = line.rstrip('\n')
+                if '@' in line:
+                    parts = line.split('@')
+                    users.append({'USERNAME': parts[0], 'DOMAIN': parts[1]})
+                elif '\\' in line:
+                    parts = line.split('\\')
+                    users.append({'USERNAME': parts[1], 'DOMAIN': parts[0]})
+                elif '/' in line:
+                    parts = line.split('/')
+                    users.append({'USERNAME': parts[1], 'DOMAIN': parts[0]})
+                else:
+                    # Handle lines with only the username and no domain
+                    users.append({'USERNAME': line, 'DOMAIN': None})
+    elif filename.endswith('.csv'):  # Handle Neo4J CSV Exports:
+        users = []
+        with open(filename, 'r', encoding='utf-8') as file:
+            lines = file.readlines()[1:]  # Read all lines and skip the first one
+            for line in lines:
+                line = line.rstrip('\n')
+                line = line.replace('"', '')
+
+                if "@" in line:
+                    line = line.split("@")
+                    users.append({'USERNAME': line[0], 'DOMAIN': line[1]})
+                elif "," in line:
+                    line = line.split(",")
+                    users.append({'USERNAME': line[0], 'DOMAIN': line[1]})
+                else:
+                    users.append({'USERNAME': line, 'DOMAIN': None})
+    else:
+        print("ERROR: Do not recognize file extension: ", filename)
+        return []
+
+    return users
 
 
 def gather_arguments():
@@ -95,6 +156,17 @@ def gather_arguments():
             args.neo4j_password, args.students, args.local_hashes, args.cred_stuffing, args.admins, args.enabled, args.kerberoastable_users)
 
 
+def group_lookup(query, group_filename, neo4j_uri, neo4j_user, neo4j_pass, neo4j_queries):
+    if group_filename:
+        group = file_to_userlist(group_filename)
+    elif neo4j_pass:
+        group = neo4j_query(neo4j_queries[query], neo4j_uri, neo4j_user, neo4j_pass)
+    else:
+        group = []
+
+    return group
+
+
 def parse_arguments(cred_stuffing_domains, custom):
     if cred_stuffing_domains:
         cred_stuffing_domains = cred_stuffing_domains.split(',')
@@ -105,6 +177,25 @@ def parse_arguments(cred_stuffing_domains, custom):
         search_terms = []
 
     return cred_stuffing_domains, search_terms
+
+
+def neo4j_query(query_string, neo4j_uri, neo4j_user, neo4j_pass):
+    try:
+        with GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_pass)) as driver:
+            session = driver.session()
+            results = session.run(query_string)
+            users = []
+            for result in results:
+                # Results should be returned in the format of domain\username, which needs parsed
+                match = re.search(r"'([^\\]+)\\\\([^']+)'", str(result))
+                if match:
+                    domain = match.group(1)
+                    username = match.group(2)
+                    users.append({'USERNAME': username, 'DOMAIN': domain})
+            return users
+    except Exception as e:
+        print(f"ERROR: Neo4j query failed, unable to pull users - {e}")
+        return []
 
 
 def print_and_log(message, log):
@@ -127,7 +218,25 @@ def open_file(l_filename):
     return lines
 
 
-def fix_bad_passwords(user_database):
-    for user in user_database:
-        user.fix_password()
-    return user_database
+def read_json_file(file_path):
+    try:
+        with open(file_path, 'r', encoding="UTF-8") as file:
+            json_data = json.load(file)
+    except FileNotFoundError:
+        print(f"Error: File '{file_path}' not found.")
+        return None
+    except json.JSONDecodeError:
+        print(f"Error: Failed to decode JSON in file '{file_path}'.")
+        return None
+
+    formatted_usernames = []
+    for username in json_data['data']['nodes'].values():
+        username_parts = username["label"].split('@')
+        if len(username_parts) == 2:
+            domain = username_parts[1]
+            username = username_parts[0]
+            formatted_usernames.append({"USERNAME": username, "DOMAIN": domain})
+        else:
+            formatted_usernames.append({"USERNAME": username_parts[0]})
+
+    return formatted_usernames

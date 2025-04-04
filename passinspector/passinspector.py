@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 import binascii
+from neo4j import GraphDatabase
 import datetime
 import json
-from neo4j import GraphDatabase
 import os
 import re
 import sys
@@ -53,6 +53,11 @@ class User:
                 self.password = dehexify(self.password)
             except Exception as e:
                 print(f"Failed to dehexify password for {self.username}: {e}")
+
+    def check_membership(self, group_members, attribute):
+        for group_member in group_members:
+            if self.username.lower() == group_member['USERNAME'].lower() and self.domain.lower() == group_member['DOMAIN'].lower():
+                setattr(self, attribute, True)
 
 
 def main(dcsync_filename="", passwords_filename="", file_prefix="", prepare_hashes_mode=False, custom="",
@@ -110,9 +115,9 @@ def main(dcsync_filename="", passwords_filename="", file_prefix="", prepare_hash
     cred_stuffing_accounts = get_cred_stuffing(cred_stuffing_filename, cred_stuffing_domains, no_dehashed)
 
     # Take users from a file, otherwise query neo4j if info was provided, otherwise just assign a blank value
-    admin_users = group_lookup("admins", admins_filename)
-    enabled_users = group_lookup("enabled", enabled_users_filename)
-    kerberoastable_users = group_lookup("kerberoastable", kerberoastable_filename)
+    admin_users = utils.group_lookup("admins", admins_filename, NEO4J_URI, NEO4J_USERNAME, NEO4J_PASSWORD, NEO4J_QUERIES)
+    enabled_users = utils.group_lookup("enabled", enabled_users_filename, NEO4J_URI, NEO4J_USERNAME, NEO4J_PASSWORD, NEO4J_QUERIES)
+    kerberoastable_users = utils.group_lookup("kerberoastable", kerberoastable_filename, NEO4J_URI, NEO4J_USERNAME, NEO4J_PASSWORD, NEO4J_QUERIES)
 
     # Check on the domains that were found to make sure they match
     dcsync_file_lines, admin_users, enabled_users, kerberoastable_users = check_domains(dcsync_file_lines, admin_users,
@@ -120,10 +125,12 @@ def main(dcsync_filename="", passwords_filename="", file_prefix="", prepare_hash
                                                                                         kerberoastable_users)
 
     # Create a list of User (see User class) objects
-    user_database = create_user_database(dcsync_file_lines, cleartext_creds, admin_users, enabled_users,
-                                         kerberoastable_users, password_file_lines)
+    user_database = create_user_database(dcsync_file_lines, cleartext_creds, enabled_users, password_file_lines)
 
     user_database = utils.fix_bad_passwords(user_database)
+    user_database = utils.check_group_member(user_database, kerberoastable_users, "kerberoastable")
+    user_database = utils.check_group_member(user_database, admin_users, "is_admin")
+    user_database = utils.check_group_member(user_database, enabled_users, "enabled")
     if cleartext_creds:
         user_database = add_cleartext_creds(user_database, cleartext_creds)
     if students_filename:
@@ -188,17 +195,6 @@ def main(dcsync_filename="", passwords_filename="", file_prefix="", prepare_hash
     print("Done!")
 
 
-def group_lookup(query, group_filename):
-    if group_filename:
-        group = file_to_userlist(group_filename)
-    elif NEO4J_PASSWORD:
-        group = neo4j_query(NEO4J_QUERIES[query])
-    else:
-        group = []
-
-    return group
-
-
 def check_if_spray(user_database, spray_users_filename, spray_passwords_filename):
     num_spray_matches = 0
     num_pass_spray_matches = 0
@@ -217,7 +213,7 @@ def check_if_spray(user_database, spray_users_filename, spray_passwords_filename
     # Step 2: Import data from external spray users file if provided
     spray_users = []
     if spray_users_filename:
-        spray_users = file_to_userlist(spray_users_filename)
+        spray_users = utils.file_to_userlist(spray_users_filename)
         if DEBUG_MODE:
             print("DEBUG: Spray users provided")
             print(spray_users)
@@ -279,44 +275,6 @@ def check_if_spray(user_database, spray_users_filename, spray_passwords_filename
         print("No spray password file supplied. Cannot calculate stats.")
 
     return user_database, num_spray_matches, num_pass_spray_matches
-
-
-def read_json_file(file_path):
-    try:
-        with open(file_path, 'r', encoding="UTF-8") as file:
-            json_data = json.load(file)
-    except FileNotFoundError:
-        print(f"Error: File '{file_path}' not found.")
-        return None
-    except json.JSONDecodeError:
-        print(f"Error: Failed to decode JSON in file '{file_path}'.")
-        return None
-
-    formatted_usernames = []
-    for username in json_data['data']['nodes'].values():
-        username_parts = username["label"].split('@')
-        if len(username_parts) == 2:
-            domain = username_parts[1]
-            username = username_parts[0]
-            formatted_usernames.append({"USERNAME": username, "DOMAIN": domain})
-        else:
-            formatted_usernames.append({"USERNAME": username_parts[0]})
-
-    return formatted_usernames
-
-
-def check_if_kerberoastable(user, domain, krb_users):
-    for user_to_check in krb_users:
-        if domain:
-            # If a domain was supplied, use it when comparing
-            if ((user.lower() == user_to_check['USERNAME'].lower()) and (
-                    domain.lower() == user_to_check['DOMAIN'].lower())):
-                return True
-        else:
-            # If the domain is blank, just compare usernames
-            if user.lower() == user_to_check['USERNAME'].lower():
-                return True
-    return False
 
 
 def check_domains(dcsync_file_lines, admin_users, enabled_users, kerberoastable_users):
@@ -534,7 +492,7 @@ def domain_change_auto(old_domain, dcsync_file_lines):
     resolved_domains = set()  # Unique set of domains for matching users
     resolved_pairs = {}  # Mapping of username -> domain (only if exactly one match exists)
     query_string = "MATCH (u:User) RETURN toLower(u.domain) + '\\\\' + toLower(u.samaccountname) AS user"
-    neo4j_results = neo4j_query(query_string)
+    neo4j_results = utils.neo4j_query(query_string, NEO4J_URI, NEO4J_USERNAME, NEO4J_PASSWORD)
 
     # Build a dictionary mapping username to a set of domains from Neo4j results
     user_domain_map = {}
@@ -621,8 +579,7 @@ def replace_dcsync_domain_user_specific(resolved_pairs, dcsync_file_lines):
     return dcsync_file_lines
 
 
-def create_user_database(dcsync_file_lines, cleartext_creds, admin_users, enabled_users, kerberoastable_users,
-                         password_file_lines):
+def create_user_database(dcsync_file_lines, cleartext_creds, enabled_users, password_file_lines):
     user_database = []
     skipped_lines = []
 
@@ -644,9 +601,6 @@ def create_user_database(dcsync_file_lines, cleartext_creds, admin_users, enable
         has_lm = lmhash != "aad3b435b51404eeaad3b435b51404ee"  # Default empty LM hash
         blank_password = nthash == "31d6cfe0d16ae931b73c59d7e0c089c0"  # Default NT hash for blank password
         password, cracked = check_if_cracked(nthash, password_file_lines)
-        enabled = check_if_enabled(username, domain, enabled_users)
-        is_admin = check_if_admin(username, domain, admin_users)
-        kerberoastable = check_if_kerberoastable(username, domain, kerberoastable_users)
         local_pass_repeat = 0
         pass_repeat = 0
         student = False
@@ -662,9 +616,9 @@ def create_user_database(dcsync_file_lines, cleartext_creds, admin_users, enable
                 cracked=cracked,
                 has_lm=has_lm,
                 blank_password=blank_password,
-                enabled=enabled,
-                is_admin=is_admin,
-                kerberoastable=kerberoastable,
+                enabled=False,
+                is_admin=False,
+                kerberoastable=False,
                 student=student,
                 local_pass_repeat=local_pass_repeat,
                 pass_repeat=pass_repeat,
@@ -716,20 +670,6 @@ def dehexify(password):
         # Handle the case where the hex conversion fails
         print("ERROR: Could not dehexify the following value: ", password)
     return dehexed_password
-
-
-def check_if_enabled(user, domain, enabled_users):
-    for user_to_compare in enabled_users:
-        if domain:
-            # If a domain was supplied, use it when comparing
-            if ((user.lower() == user_to_compare['USERNAME'].lower()) and (
-                    domain.lower() == user_to_compare['DOMAIN'].lower())):
-                return True
-        else:
-            # If the domain is blank, just compare usernames
-            if user.lower() == user_to_compare['USERNAME'].lower():
-                return True
-    return False
 
 
 def check_if_admin(user, domain, admin_users):
@@ -1354,52 +1294,6 @@ def parse_admin_file(l_admins_filename):
     return l_admin_users
 
 
-def file_to_userlist(filename=None):
-    if not filename:
-        return []
-    filename = filename.strip().lower()
-    if filename.endswith('.json'):  # Handle Bloodhound CE JSON exports
-        users = read_json_file(filename)
-    elif filename.endswith('.txt'):
-        users = []
-        with open(filename, 'r') as file:
-            for line in file:
-                line = line.rstrip('\n')
-                if '@' in line:
-                    parts = line.split('@')
-                    users.append({'USERNAME': parts[0], 'DOMAIN': parts[1]})
-                elif '\\' in line:
-                    parts = line.split('\\')
-                    users.append({'USERNAME': parts[1], 'DOMAIN': parts[0]})
-                elif '/' in line:
-                    parts = line.split('/')
-                    users.append({'USERNAME': parts[1], 'DOMAIN': parts[0]})
-                else:
-                    # Handle lines with only the username and no domain
-                    users.append({'USERNAME': line, 'DOMAIN': None})
-    elif filename.endswith('.csv'):  # Handle Neo4J CSV Exports:
-        users = []
-        with open(filename, 'r', encoding='utf-8') as file:
-            lines = file.readlines()[1:]  # Read all lines and skip the first one
-            for line in lines:
-                line = line.rstrip('\n')
-                line = line.replace('"', '')
-
-                if "@" in line:
-                    line = line.split("@")
-                    users.append({'USERNAME': line[0], 'DOMAIN': line[1]})
-                elif "," in line:
-                    line = line.split(",")
-                    users.append({'USERNAME': line[0], 'DOMAIN': line[1]})
-                else:
-                    users.append({'USERNAME': line, 'DOMAIN': None})
-    else:
-        print("ERROR: Do not recognize file extension: ", filename)
-        return []
-
-    return users
-
-
 def convert_to_leetspeak(term):
     leetspeak_mapping = {
         'a': '@',
@@ -1569,32 +1463,13 @@ def prepare_hashes(l_dcsync_filename, l_file_prefix):
 
 def parse_students(user_database, students_filename):
     print("Parsing students")
-    students = file_to_userlist(students_filename)
+    students = utils.file_to_userlist(students_filename)
     for user in user_database:
         for student in students:
             if user.username.lower() == student['USERNAME'].lower():
                 user.student = True
                 break
     return user_database
-
-
-def neo4j_query(query_string):
-    try:
-        with GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USERNAME, NEO4J_PASSWORD)) as driver:
-            session = driver.session()
-            results = session.run(query_string)
-            users = []
-            for result in results:
-                # Results should be returned in the format of domain\username, which needs parsed
-                match = re.search(r"'([^\\]+)\\\\([^']+)'", str(result))
-                if match:
-                    domain = match.group(1)
-                    username = match.group(2)
-                    users.append({'USERNAME': username, 'DOMAIN': domain})
-            return users
-    except Exception as e:
-        print(f"ERROR: Neo4j query failed, unable to pull users - {e}")
-        return []
 
 
 def emails_from_neo4j(user_database):
