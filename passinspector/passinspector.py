@@ -7,8 +7,8 @@ import os
 import re
 import sys
 from tqdm import tqdm
-import utils
-import export_xlsx
+from . import utils
+from . import export_xlsx
 
 DEBUG_MODE = False
 NEO4J_PASSWORD = "bloodhoundcommunityedition"
