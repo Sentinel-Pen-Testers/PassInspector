@@ -220,23 +220,40 @@ def open_file(l_filename):
 
 def read_json_file(file_path):
     try:
-        with open(file_path, 'r', encoding="UTF-8") as file:
+        # use utf-8-sig to strip BOM if present
+        with open(file_path, 'r', encoding="utf-8-sig") as file:
             json_data = json.load(file)
     except FileNotFoundError:
         print(f"Error: File '{file_path}' not found.")
         return None
-    except json.JSONDecodeError:
-        print(f"Error: Failed to decode JSON in file '{file_path}'.")
+    except json.JSONDecodeError as e:
+        print(f"Error: Failed to decode JSON in file '{file_path}': {e}")
+        return None
+
+    # decide which structure we're dealing with
+    if isinstance(json_data, dict) and 'data' in json_data and 'nodes' in json_data['data']:
+        records = json_data['data']['nodes'].values()
+    elif isinstance(json_data, list):
+        records = json_data
+    else:
+        print(f"Error: Unexpected JSON structure (got {type(json_data)}).")
         return None
 
     formatted_usernames = []
-    for username in json_data['data']['nodes'].values():
-        username_parts = username["label"].split('@')
-        if len(username_parts) == 2:
-            domain = username_parts[1]
-            username = username_parts[0]
-            formatted_usernames.append({"USERNAME": username, "DOMAIN": domain})
+    for entry in records:
+        # pick the right field
+        if isinstance(entry, dict) and 'label' in entry:
+            raw = entry['label']
+        elif isinstance(entry, dict) and 'u.samaccountname' in entry:
+            raw = entry['u.samaccountname']
         else:
-            formatted_usernames.append({"USERNAME": username_parts[0]})
+            print(f"Warning: skipping unrecognized entry: {entry}")
+            continue
+
+        parts = raw.split('@', 1)
+        if len(parts) == 2:
+            formatted_usernames.append({"USERNAME": parts[0], "DOMAIN": parts[1]})
+        else:
+            formatted_usernames.append({"USERNAME": parts[0]})
 
     return formatted_usernames
