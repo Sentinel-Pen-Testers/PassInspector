@@ -92,7 +92,7 @@ def main(dcsync_filename="", passwords_filename="", file_prefix="", prepare_hash
     if neo4j_username:
         global NEO4J_USERNAME
         NEO4J_USERNAME = neo4j_username
-    if neo4j_username:
+    if neo4j_password:
         global NEO4J_PASSWORD
         NEO4J_PASSWORD = neo4j_password
 
