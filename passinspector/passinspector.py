@@ -167,7 +167,7 @@ def main(dcsync_filename="", passwords_filename="", file_prefix="", prepare_hash
     text_blank_passwords, result_blank_enabled = blank_enabled_search(user_database, text_blank_passwords)
     pbar.update(1)
     # Step 7: Check for credential stuffing matches
-    text_cred_stuffing, result_cred_stuffing = cred_stuffing_check(cred_stuffing_accounts, dcsync_results)
+    text_cred_stuffing, result_cred_stuffing = cred_stuffing_check(cred_stuffing_accounts, user_database)
     pbar.update(1)
     # Step 8: Check for spray matches
     user_database, num_spray_matches, num_pass_spray_matches = check_if_spray(user_database, spray_users_filename,

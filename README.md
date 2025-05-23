@@ -72,14 +72,14 @@ PassInspector generates three output files:
 ## Usage
 
 ```bash
-python PassInspector.py -d <dcsync-file> -p <password-file> [-a <admin-users-file> -c <custom-search-terms> -e <enabled-users-file> -sp <spray-passwords-file> -su <spray-users-file> -lh <local-hashes-file> -cs <credential-stuffing-file> -csd <cred-stuffing-domains> -db -nd -dpi -fp <file-prefix>]
+python3 passinspector/passinspector.py -d <dcsync-file> -p <password-file> [-a <admin-users-file> -c <custom-search-terms> -e <enabled-users-file> -sp <spray-passwords-file> -su <spray-users-file> -lh <local-hashes-file> -cs <credential-stuffing-file> -csd <cred-stuffing-domains> -db -nd -dpi -fp <file-prefix>]
 ```
 
 **Example**
 Just running the script will return the shortest, longest, and most used password. Also, common passwords such as "password" and "qwerty" will be checked. The file should be a list of passwords. If there are hashes and/or usernames in the list, they should be separated from the passwords by a colon `:` and the password should be the last item on the line.
 ```bash
 ┌──(twilson㉿kali)-[~/]
-└─$ python PassInspector.py -d dcsync.txt -p cracked.txt
+└─$ python3 passinspector/passinspector.py -d dcsync.txt -p cracked.txt
 
 ==============================
 PassInspector  -  Version 2.3
@@ -116,7 +116,7 @@ Done!
 If you want to search for terms related to the organization or similar, add terms with the `-c` option as comma separated words, no spaces.
 ```bash
 ┌──(twilson㉿kali)-[~/]
-└─$ python PassInspector.py -d dcsync.txt -p cracked.txt -c citrix -np neo4j
+└─$ python3 passinspector/passinspector.py -d dcsync.txt -p cracked.txt -c citrix -np neo4j
 
 ==============================
 PassInspector  -  Version 2.3
