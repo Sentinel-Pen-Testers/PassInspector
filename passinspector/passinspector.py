@@ -22,6 +22,7 @@ NEO4J_QUERIES = {
                       "tolower(u.samaccountname) AS user"}
 NEO4J_URI = f"neo4j://localhost"
 NEO4J_USERNAME = "neo4j"
+NO_NEO4J = False
 
 
 class User:
@@ -62,7 +63,7 @@ class User:
 
 def main(dcsync_filename="", passwords_filename="", file_prefix="", prepare_hashes_mode=False, custom="",
                     cred_stuffing_domains=False, neo4j_hostname="", neo4j_username="", neo4j_password="",
-                    no_dehashed=False, spray_users_filename="", spray_passwords_filename="", students_filename="",
+                    no_neo4j=False, no_dehashed=False, spray_users_filename="", spray_passwords_filename="", students_filename="",
                     local_hash_filename="", cred_stuffing_filename="", admins_filename="", enabled_users_filename="",
                     kerberoastable_filename="", duplicate_password_identifier=False):
     script_version = 2.5
@@ -75,7 +76,8 @@ def main(dcsync_filename="", passwords_filename="", file_prefix="", prepare_hash
         (dcsync_filename, passwords_filename, spray_users_filename, spray_passwords_filename,
          duplicate_password_identifier, no_dehashed, cred_stuffing_domains, prepare_hashes_mode, custom,
          neo4j_hostname, neo4j_username, neo4j_password, students_filename, local_hash_filename,
-         cred_stuffing_filename, admins_filename, enabled_users_filename, kerberoastable_filename) = utils.gather_arguments()
+         cred_stuffing_filename, admins_filename, enabled_users_filename, kerberoastable_filename,
+         no_neo4j) = utils.gather_arguments()
     # Handle user error in the provided variables
     cred_stuffing_domains, search_terms = utils.parse_arguments(cred_stuffing_domains, custom)
 
@@ -86,18 +88,23 @@ def main(dcsync_filename="", passwords_filename="", file_prefix="", prepare_hash
         file_prefix = file_prefix.strip()
 
     # Parse Neo4j arguments, if provided
-    if neo4j_hostname:
+    global NO_NEO4J
+    NO_NEO4J = no_neo4j
+
+    if neo4j_hostname and not NO_NEO4J:
         global NEO4J_URI
         NEO4J_URI = f"neo4j://{neo4j_hostname}"
-    if neo4j_username:
+    if neo4j_username and not NO_NEO4J:
         global NEO4J_USERNAME
         NEO4J_USERNAME = neo4j_username
-    if neo4j_password:
+    if neo4j_password and not NO_NEO4J:
         global NEO4J_PASSWORD
         NEO4J_PASSWORD = neo4j_password
 
     # Test Neo4j connectivity, and if it fails, set the password to blank so the script doesn't try to connect later
-    if not testNeo4jConnectivity():
+    if not NO_NEO4J and not testNeo4jConnectivity():
+        NEO4J_PASSWORD = ""
+    elif NO_NEO4J:
         NEO4J_PASSWORD = ""
 
     # Designed to figure out what actions will need to take place depending on the file types provided
@@ -115,9 +122,9 @@ def main(dcsync_filename="", passwords_filename="", file_prefix="", prepare_hash
     cred_stuffing_accounts = get_cred_stuffing(cred_stuffing_filename, cred_stuffing_domains, no_dehashed)
 
     # Take users from a file, otherwise query neo4j if info was provided, otherwise just assign a blank value
-    admin_users = utils.group_lookup("admins", admins_filename, NEO4J_URI, NEO4J_USERNAME, NEO4J_PASSWORD, NEO4J_QUERIES)
-    enabled_users = utils.group_lookup("enabled", enabled_users_filename, NEO4J_URI, NEO4J_USERNAME, NEO4J_PASSWORD, NEO4J_QUERIES)
-    kerberoastable_users = utils.group_lookup("kerberoastable", kerberoastable_filename, NEO4J_URI, NEO4J_USERNAME, NEO4J_PASSWORD, NEO4J_QUERIES)
+    admin_users = utils.group_lookup("admins", admins_filename, NEO4J_URI, NEO4J_USERNAME, NEO4J_PASSWORD, NEO4J_QUERIES, NO_NEO4J)
+    enabled_users = utils.group_lookup("enabled", enabled_users_filename, NEO4J_URI, NEO4J_USERNAME, NEO4J_PASSWORD, NEO4J_QUERIES, NO_NEO4J)
+    kerberoastable_users = utils.group_lookup("kerberoastable", kerberoastable_filename, NEO4J_URI, NEO4J_USERNAME, NEO4J_PASSWORD, NEO4J_QUERIES, NO_NEO4J)
 
     # Check on the domains that were found to make sure they match
     dcsync_file_lines, admin_users, enabled_users, kerberoastable_users = check_domains(dcsync_file_lines, admin_users,
@@ -198,7 +205,9 @@ def main(dcsync_filename="", passwords_filename="", file_prefix="", prepare_hash
 def check_if_spray(user_database, spray_users_filename, spray_passwords_filename):
     num_spray_matches = 0
     num_pass_spray_matches = 0
-    neo4j_connectivity = testNeo4jConnectivity()
+    neo4j_connectivity = False
+    if not NO_NEO4J:
+        neo4j_connectivity = testNeo4jConnectivity()
 
     # Return default values if no spray files are provided and Neo4j is unavailable
     if not spray_users_filename and not spray_passwords_filename and not neo4j_connectivity:
@@ -351,7 +360,9 @@ def check_domains(dcsync_file_lines, admin_users, enabled_users, kerberoastable_
     # Phase 5: Resolve unique domains from the DCSync file
     # ------------------------------------------------------------
     if unique_domains_dcsync:
-        neo4j_status = testNeo4jConnectivity()
+        neo4j_status = False
+        if not NO_NEO4J:
+            neo4j_status = testNeo4jConnectivity()
 
         for unique_domain in tqdm(unique_domains_dcsync, desc="Resolving unique DCSync domains", ncols=80):
             no_match_text = "imported data"
@@ -463,6 +474,9 @@ def domain_change_auto(old_domain, dcsync_file_lines):
     # This function checks all users matching a unique domain to see if they appear in Neo4j
     # a single time. If so, it will auto "fix" them. Otherwise, it'll skip on to allow a
     # manual adjustment to be made
+    if NO_NEO4J:
+        print("Neo4j checks disabled, skipping automatic domain resolution.")
+        return "", {}
 
     # Step 1: Extract all usernames for the unique domain
     usernames = []
@@ -1473,6 +1487,9 @@ def parse_students(user_database, students_filename):
 
 
 def emails_from_neo4j(user_database):
+    if NO_NEO4J:
+        print("Neo4j checks disabled, skipping email lookup.")
+        return user_database
     try:
         with GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USERNAME, NEO4J_PASSWORD)) as driver:
             with driver.session() as session:
@@ -1504,6 +1521,8 @@ def emails_from_neo4j(user_database):
 
 
 def testNeo4jConnectivity():
+    if NO_NEO4J:
+        return False
     try:
         with GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USERNAME, NEO4J_PASSWORD)) as driver:
             driver.verify_connectivity()
@@ -1524,6 +1543,9 @@ def retrieve_cred_stuffing_results(cred_stuffing_domains):
         return []
 
     cred_stuffing_accounts = []
+    if NO_NEO4J and not cred_stuffing_domains:
+        print("Neo4j checks disabled, skipping DeHashed search")
+        return []
     if cred_stuffing_domains:
         # If a credential-stuffing domain was specified, use that
         print("Searching DeHashed for credential stuffing results (This may take some time)")
@@ -1542,7 +1564,7 @@ def retrieve_cred_stuffing_results(cred_stuffing_domains):
         else:
             print("No DeHashed results returned for credential stuffing checks")
             return []
-    elif NEO4J_PASSWORD:
+    elif NEO4J_PASSWORD and not NO_NEO4J:
         # If a Neo4j password was specified, use that
         try:
             with GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USERNAME, NEO4J_PASSWORD)) as driver:
@@ -1595,7 +1617,7 @@ def get_cred_stuffing(cred_stuffing_filename, cred_stuffing_domains, search_deha
         cred_stuffing_accounts = utils.open_file(cred_stuffing_filename)
     elif os.path.isfile("passinspector_dehashed_results.txt"):
         cred_stuffing_accounts = import_dehashed_file()
-    elif (cred_stuffing_domains or NEO4J_PASSWORD) and search_dehashed:
+    elif (cred_stuffing_domains or (NEO4J_PASSWORD and not NO_NEO4J)) and search_dehashed:
         # If a credential_stuffing domain is provided, search with DeHashed
         # If a password for Neo4j was provided, it will try to pull the email domain from AD
         # MATCH (u:User) WHERE u.email IS NOT NULL RETURN distinct(split(u.email, '@')[1]) as DOMAIN

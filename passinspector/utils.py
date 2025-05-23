@@ -144,6 +144,9 @@ def gather_arguments():
     parser.add_argument('-su', '--spray-users', help='(OPTIONAL) Match cracked users to list of usernames '
                                                      'that will be sprayed.')
 
+    parser.add_argument('-nn', '--no-neo4j', action='store_true',
+                        help='(OPTIONAL) Disable all Neo4j checks')
+
     # Parse the command-line arguments
     args = parser.parse_args()
 
@@ -152,13 +155,14 @@ def gather_arguments():
 
     return (args.dcsync, args.passwords, args.spray_users, args.spray_passwords, args.duplicate_password_identifier,
             args.no_dehashed, args.cred_stuffing_domains, args.prepare_hashes, args.custom, args.neo4j_hostname, args.neo4j_username,
-            args.neo4j_password, args.students, args.local_hashes, args.cred_stuffing, args.admins, args.enabled, args.kerberoastable_users)
+            args.neo4j_password, args.students, args.local_hashes, args.cred_stuffing, args.admins, args.enabled,
+            args.kerberoastable_users, args.no_neo4j)
 
 
-def group_lookup(query, group_filename, neo4j_uri, neo4j_user, neo4j_pass, neo4j_queries):
+def group_lookup(query, group_filename, neo4j_uri, neo4j_user, neo4j_pass, neo4j_queries, no_neo4j=False):
     if group_filename:
         group = file_to_userlist(group_filename)
-    elif neo4j_pass:
+    elif neo4j_pass and not no_neo4j:
         group = neo4j_query(neo4j_queries[query], neo4j_uri, neo4j_user, neo4j_pass)
     else:
         group = []
