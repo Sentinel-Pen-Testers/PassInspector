@@ -71,7 +71,6 @@ def gather_arguments():
     parser.add_argument('-a', '--admins', help='(OPTIONAL) A file containing a list of domain '
                                                'administrative users. The script will check if the passwords for these '
                                                'users are used on other accounts by using hashes. The format should be '
-                                               'DOMAIN\\USERNAME or USERNAME. BloodHound JSON files are also accepted.'
                                                'DOMAIN\\USERNAME or USERNAME. BloodHound JSON files are also accepted. '
                                                'Overrides automatic Neo4j queries.')
 
