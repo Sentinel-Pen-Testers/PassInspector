@@ -168,6 +168,7 @@ Parameter | Description
 -k, --kerberoastable-users | (Optional) File containing Kerberoastable users. Overrides automatic Neo4j queries.
 -lh, --local-hashes | (Optional) LSASS dump file to check for local account password reuse.
 -nd, --no-dehashed | (Optional) Skip DeHashed search.
+-nn, --no-neo4j | (Optional) Disable all Neo4j checks.
 -nh, --neo4j-hostname | (Optional) Neo4j hostname or IP (default: localhost).
 -nu, --neo4j-username | (Optional) Neo4j username (default: neo4j).
 -np, --neo4j-password | (Optional) Neo4j password (required for automatic queries).
