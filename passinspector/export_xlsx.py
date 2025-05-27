@@ -3,7 +3,8 @@ import xlsxwriter
 HEADERS = [
     'DOMAIN', 'USERNAME', 'LMHASH', 'NTHASH', 'PASSWORD', 'CRACKED', 'HAS_LM',
     'BLANK_PASSWORD', 'ENABLED', 'IS_ADMIN', 'KERBEROASTABLE', 'STUDENT',
-    'LOCAL_PASS_REPEAT', 'PASS_REPEAT_COUNT', 'SPRAY_USER', 'SPRAY_PASSWORD', 'EMAIL'
+    'LOCAL_PASS_REPEAT', 'PASS_REPEAT_COUNT', 'SPRAY_USER', 'SPRAY_PASSWORD', 'EMAIL',
+    'JOB_TITLE', 'DESCRIPTION'
 ]
 
 HIDE_COLUMNS = {'LMHASH', 'NTHASH'}
@@ -37,7 +38,9 @@ def prepare_data(user_database):
             str(user.cracked), str(user.has_lm), str(user.blank_password),
             str(user.enabled), str(user.is_admin), str(user.kerberoastable),
             str(user.student), user.local_pass_repeat, user.pass_repeat,
-            user.spray_user, user.spray_password, user.email
+            user.spray_user, user.spray_password, user.email,
+            user.job_title if user.job_title else "",
+            user.description if user.description else ""
         ]
         data.append(values)
 
