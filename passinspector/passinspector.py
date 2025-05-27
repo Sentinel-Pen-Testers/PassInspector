@@ -28,7 +28,7 @@ NO_NEO4J = False
 class User:
     def __init__(self, domain, username, lmhash, nthash, password, cracked, has_lm,
                  blank_password, enabled, is_admin, kerberoastable, student, local_pass_repeat, pass_repeat, email,
-                 spray_user, spray_password):
+                 job_title, description, spray_user, spray_password):
         self.domain = domain
         self.username = username
         self.lmhash = lmhash
@@ -44,6 +44,8 @@ class User:
         self.local_pass_repeat = local_pass_repeat
         self.pass_repeat = pass_repeat
         self.email = email
+        self.job_title = job_title
+        self.description = description
         self.spray_user = spray_user
         self.spray_password = spray_password
 
@@ -637,6 +639,8 @@ def create_user_database(dcsync_file_lines, cleartext_creds, enabled_users, pass
                 local_pass_repeat=local_pass_repeat,
                 pass_repeat=pass_repeat,
                 email=None,
+                job_title=None,
+                description=None,
                 spray_user=False,
                 spray_password=False
             )
@@ -1493,27 +1497,38 @@ def emails_from_neo4j(user_database):
     try:
         with GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USERNAME, NEO4J_PASSWORD)) as driver:
             with driver.session() as session:
-                # Run one big query to fetch all user email info from Neo4j
+                # Run one big query to fetch user email, job title, and description info from Neo4j
                 query = (
                     "MATCH (u:User) "
                     "RETURN toUpper(u.samaccountname) AS username, "
                     "toUpper(u.domain) AS domain, "
-                    "u.email AS email"
+                    "u.email AS email, "
+                    "u.title AS title, "
+                    "u.description AS description"
                 )
                 results = session.run(query)
-                # Build a mapping: (username, domain) -> email
-                user_email_map = {}
+                # Build a mapping: (username, domain) -> {email, title, description}
+                user_info_map = {}
                 for record in results:
                     uname = record["username"]
                     dom = record["domain"] if record["domain"] is not None else "NONE"
                     email = record["email"]
-                    user_email_map[(uname, dom)] = email
+                    title = record["title"]
+                    description = record["description"]
+                    user_info_map[(uname, dom)] = {
+                        "email": email,
+                        "title": title,
+                        "description": description,
+                    }
 
                 # Update each user in the database using the mapping
                 for user in user_database:
                     uname = user.username.upper()
                     dom = user.domain.upper() if user.domain else "NONE"
-                    user.email = user_email_map.get((uname, dom), None)
+                    info = user_info_map.get((uname, dom), {})
+                    user.email = info.get("email")
+                    user.job_title = info.get("title")
+                    user.description = info.get("description")
             return user_database
     except Exception as e:
         print(f"ERROR: Neo4j query failed, unable to pull user emails - {e}")
