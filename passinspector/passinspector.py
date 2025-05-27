@@ -1,17 +1,21 @@
 #!/usr/bin/env python
 import binascii
-from neo4j import GraphDatabase
 import datetime
 import json
 import os
 import re
 import sys
+import logging
+from neo4j import GraphDatabase
 from tqdm import tqdm
 from . import utils
 from . import export_xlsx
+from . import config
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 DEBUG_MODE = False
-NEO4J_PASSWORD = "bloodhoundcommunityedition"
 NEO4J_QUERIES = {
     "admins": "MATCH (u:User)-[:MemberOf*1..]->(g:Group) "
               "WHERE g.objectid ENDS WITH '-512' OR g.objectid ENDS WITH '-519' OR g.objectid ENDS WITH '-544' "
@@ -20,14 +24,15 @@ NEO4J_QUERIES = {
                "tolower(u.samaccountname) AS user",
     "kerberoastable": "MATCH (u:User)WHERE u.hasspn=true RETURN tolower(u.domain) + '\\\\' + "
                       "tolower(u.samaccountname) AS user"}
-NEO4J_URI = f"neo4j://localhost"
-NEO4J_USERNAME = "neo4j"
+NEO4J_URI = config.NEO4J_URI
+NEO4J_USERNAME = config.NEO4J_USERNAME
+NEO4J_PASSWORD = config.NEO4J_PASSWORD
 
 
 class User:
     def __init__(self, domain, username, lmhash, nthash, password, cracked, has_lm,
                  blank_password, enabled, is_admin, kerberoastable, student, local_pass_repeat, pass_repeat, email,
-                 spray_user, spray_password):
+                 spray_user, spray_password, job_title=None):
         self.domain = domain
         self.username = username
         self.lmhash = lmhash
@@ -45,6 +50,7 @@ class User:
         self.email = email
         self.spray_user = spray_user
         self.spray_password = spray_password
+        self.job_title = job_title
 
     def fix_password(self):
         """Fixes a password if it is in HEX format."""
@@ -52,7 +58,7 @@ class User:
             try:
                 self.password = dehexify(self.password)
             except Exception as e:
-                print(f"Failed to dehexify password for {self.username}: {e}")
+                logger.info(f"Failed to dehexify password for {self.username}: {e}")
 
     def check_membership(self, group_members, attribute):
         for group_member in group_members:
@@ -64,18 +70,19 @@ def main(dcsync_filename="", passwords_filename="", file_prefix="", prepare_hash
                     cred_stuffing_domains=False, neo4j_hostname="", neo4j_username="", neo4j_password="",
                     no_dehashed=False, spray_users_filename="", spray_passwords_filename="", students_filename="",
                     local_hash_filename="", cred_stuffing_filename="", admins_filename="", enabled_users_filename="",
-                    kerberoastable_filename="", duplicate_password_identifier=False):
+                    kerberoastable_filename="", duplicate_password_identifier=False, skip_neo4j=False):
     script_version = 2.5
-    print("\n==============================")
-    print("PassInspector  -  Version", script_version)
-    print("==============================\n")
+    logger.info("\n==============================")
+    logger.info("PassInspector  -  Version", script_version)
+    logger.info("==============================\n")
 
     # If the script was manually run, grab the command line arguments
     if not dcsync_filename:
         (dcsync_filename, passwords_filename, spray_users_filename, spray_passwords_filename,
          duplicate_password_identifier, no_dehashed, cred_stuffing_domains, prepare_hashes_mode, custom,
          neo4j_hostname, neo4j_username, neo4j_password, students_filename, local_hash_filename,
-         cred_stuffing_filename, admins_filename, enabled_users_filename, kerberoastable_filename) = utils.gather_arguments()
+         cred_stuffing_filename, admins_filename, enabled_users_filename, kerberoastable_filename,
+         skip_neo4j) = utils.gather_arguments()
     # Handle user error in the provided variables
     cred_stuffing_domains, search_terms = utils.parse_arguments(cred_stuffing_domains, custom)
 
@@ -96,8 +103,10 @@ def main(dcsync_filename="", passwords_filename="", file_prefix="", prepare_hash
         global NEO4J_PASSWORD
         NEO4J_PASSWORD = neo4j_password
 
-    # Test Neo4j connectivity, and if it fails, set the password to blank so the script doesn't try to connect later
-    if not testNeo4jConnectivity():
+    if not skip_neo4j:
+        if not testNeo4jConnectivity():
+            NEO4J_PASSWORD = ""
+    else:
         NEO4J_PASSWORD = ""
 
     # Designed to figure out what actions will need to take place depending on the file types provided
@@ -107,7 +116,7 @@ def main(dcsync_filename="", passwords_filename="", file_prefix="", prepare_hash
     user_database_cracked = []  # Values for any cracked user credential
 
     dcsync_file_lines = utils.open_file(dcsync_filename)
-    dcsync_file_lines, cleartext_creds = filter_dcsync_file(dcsync_file_lines)
+    dcsync_file_lines, cleartext_creds, machine_count = filter_dcsync_file(dcsync_file_lines)
 
     password_file_lines = utils.open_file(passwords_filename)
     password_file_lines = deduplicate_passwords(password_file_lines)
@@ -183,16 +192,16 @@ def main(dcsync_filename="", passwords_filename="", file_prefix="", prepare_hash
                                  text_blank_passwords, text_terms, text_seasons, text_keyboard_walks,
                                  text_custom_search, text_username_passwords, text_admin_pass_reuse, text_lm_hashes,
                                  text_cred_stuffing, num_spray_matches,
-                                 num_pass_spray_matches, user_database)
+                                 num_pass_spray_matches, user_database, machine_count)
 
-    print("Writing out files")
+    logger.info("Writing out files")
     write_cracked_file(printed_stats, file_datetime, user_database, result_enabled_shortest_passwords,
                        result_enabled_longest_passwords, result_all_shortest_passwords, result_all_longest_passwords,
                        result_blank_passwords, result_common_terms, result_seasons, result_keyboard_walks,
                        result_custom_search, result_username_passwords, results_admin_pass_reuse, result_lm_hash_users,
                        result_blank_enabled, result_cred_stuffing)
     export_xlsx.write_xlsx(file_datetime, user_database)
-    print("Done!")
+    logger.info("Done!")
 
 
 def check_if_spray(user_database, spray_users_filename, spray_passwords_filename):
@@ -202,12 +211,12 @@ def check_if_spray(user_database, spray_users_filename, spray_passwords_filename
 
     # Return default values if no spray files are provided and Neo4j is unavailable
     if not spray_users_filename and not spray_passwords_filename and not neo4j_connectivity:
-        print("No input files provided, and Neo4j connectivity is unavailable. Exiting.")
+        logger.info("No input files provided, and Neo4j connectivity is unavailable. Exiting.")
         return user_database, 123456, 123456  # Tells the printing function not to print these stats
 
     # Step 1: Fetch emails from Neo4j if Neo4j connectivity is available
     if neo4j_connectivity:
-        print("Fetching emails from Neo4j...")
+        logger.info("Fetching emails from Neo4j...")
         user_database = emails_from_neo4j(user_database)
 
     # Step 2: Import data from external spray users file if provided
@@ -215,8 +224,8 @@ def check_if_spray(user_database, spray_users_filename, spray_passwords_filename
     if spray_users_filename:
         spray_users = utils.file_to_userlist(spray_users_filename)
         if DEBUG_MODE:
-            print("DEBUG: Spray users provided")
-            print(spray_users)
+            logger.debug(" Spray users provided")
+            logger.info(spray_users)
 
     # Step 3: Determine which users in the user database were found externally
     externally_found_users = []
@@ -246,17 +255,17 @@ def check_if_spray(user_database, spray_users_filename, spray_passwords_filename
                     break
 
     if DEBUG_MODE:
-        print("DEBUG: Externally found users")
-        print([vars(user) for user in externally_found_users])
+        logger.debug(" Externally found users")
+        logger.info([vars(user) for user in externally_found_users])
 
     # Step 4: Check passwords from spray file if provided
     if spray_passwords_filename:
-        print("Checking passwords from spray file...")
+        logger.info("Checking passwords from spray file...")
         with open(spray_passwords_filename, 'r') as passwords_file:
             spray_passwords = [password.strip().lower() for password in passwords_file]
             if DEBUG_MODE:
-                print("DEBUG: Provided spray passwords")
-                print(spray_passwords)
+                logger.debug(" Provided spray passwords")
+                logger.info(spray_passwords)
 
         for user in user_database:
             if user.spray_user and user.password and user.password.lower() in spray_passwords:
@@ -272,7 +281,7 @@ def check_if_spray(user_database, spray_users_filename, spray_passwords_filename
             if user.spray_password and user.enabled:
                 num_pass_spray_matches += 1
     else:
-        print("No spray password file supplied. Cannot calculate stats.")
+        logger.info("No spray password file supplied. Cannot calculate stats.")
 
     return user_database, num_spray_matches, num_pass_spray_matches
 
@@ -295,7 +304,7 @@ def check_domains(dcsync_file_lines, admin_users, enabled_users, kerberoastable_
             parts = line.split(':')
             domain_user_combined = parts[0].split('\\', 1)
         except IndexError:
-            print(f"ERROR: Index error encountered: {IndexError}")
+            logger.info(f"ERROR: Index error encountered: {IndexError}")
             return None
         # If there is a domain specified, add it to the set
         if len(domain_user_combined) == 2:
@@ -312,8 +321,8 @@ def check_domains(dcsync_file_lines, admin_users, enabled_users, kerberoastable_
         imported_domains.add(user['DOMAIN'].lower())
 
     if DEBUG_MODE:
-        print(f"DEBUG: imported_domains {imported_domains}")
-        print(f"DEBUG: dcsync_domains {dcsync_domains}")
+        logger.info(f"DEBUG: imported_domains {imported_domains}")
+        logger.info(f"DEBUG: dcsync_domains {dcsync_domains}")
 
     # ------------------------------------------------------------
     # Phase 3: Compare domains to find uniques
@@ -345,7 +354,7 @@ def check_domains(dcsync_file_lines, admin_users, enabled_users, kerberoastable_
                 admin_users, enabled_users, kerberoastable_users = replace_imported_domain(
                     old_domain, new_domain, admin_users, enabled_users, kerberoastable_users)
             else:
-                print(f"No changes made for domain {unique_domain}")
+                logger.info(f"No changes made for domain {unique_domain}")
 
     # ------------------------------------------------------------
     # Phase 5: Resolve unique domains from the DCSync file
@@ -373,23 +382,23 @@ def check_domains(dcsync_file_lines, admin_users, enabled_users, kerberoastable_
                 old_domain = unique_domain
                 dcsync_file_lines = replace_dcsync_domain(old_domain, new_domain, dcsync_file_lines)
             else:
-                print(f"No changes made for domain {unique_domain}")
+                logger.info(f"No changes made for domain {unique_domain}")
 
     return dcsync_file_lines, admin_users, enabled_users, kerberoastable_users
 
 
 def domain_change_cli(unique_domain, no_match_text, domain_choices):
-    print("============================================================================\n")
-    print(f"! The domain {unique_domain} doesn't appear to match the {no_match_text}.\n")
-    print("! If it is incorrect, PassInspector cannot correctly determine\n")
-    print("! if users are enabled, Kerberoastable, and/or administrative\n")
-    print(f"! Please enter the intended domain (from the {no_match_text})\n")
-    print("! or press ENTER if no changes should be made.\n")
-    print("============================================================================\n")
-    print("! Available options: \n")
+    logger.info("============================================================================\n")
+    logger.info(f"! The domain {unique_domain} doesn't appear to match the {no_match_text}.\n")
+    logger.info("! If it is incorrect, PassInspector cannot correctly determine\n")
+    logger.info("! if users are enabled, Kerberoastable, and/or administrative\n")
+    logger.info(f"! Please enter the intended domain (from the {no_match_text})\n")
+    logger.info("! or press ENTER if no changes should be made.\n")
+    logger.info("============================================================================\n")
+    logger.info("! Available options: \n")
     if domain_choices:
         for domain_to_print in domain_choices:
-            print(f"{domain_to_print}")
+            logger.info(f"{domain_to_print}")
     new_domain = input("(Press ENTER for no changes) Matching Domain: ")
     new_domain = new_domain.lower().strip()
     return new_domain
@@ -445,7 +454,7 @@ def domain_change_tui(stdscr, unique_domain, no_match_text, domain_choices):
 
 
 def replace_imported_domain(old_domain, new_domain, admin_users, enabled_users, kerberoastable_users):
-    print(f"Updating {old_domain} domain in imported data to {new_domain}")
+    logger.info(f"Updating {old_domain} domain in imported data to {new_domain}")
 
     for user in admin_users:
         if user['DOMAIN'].lower() == old_domain:
@@ -481,11 +490,11 @@ def domain_change_auto(old_domain, dcsync_file_lines):
                     username = rest.split(":", 1)[0]  # Extract the username before the first ':'
                     usernames.append(username)
     if DEBUG_MODE:
-        print(f"Found the following users for the {old_domain} domain:")
-        print(usernames)
+        logger.info(f"Found the following users for the {old_domain} domain:")
+        logger.info(usernames)
 
     if not usernames:
-        print(f"No usernames found for the domain '{old_domain}' in the DCSync file. Something must have gone wrong.")
+        logger.info(f"No usernames found for the domain '{old_domain}' in the DCSync file. Something must have gone wrong.")
         return "", {}
 
     # Step 2: Query Neo4j for all users and build a mapping of username to domains
@@ -512,16 +521,16 @@ def domain_change_auto(old_domain, dcsync_file_lines):
                 resolved_pairs[uname] = list(domains)[0]
                 resolved_domains.add(list(domains)[0])
                 if DEBUG_MODE:
-                    print(f"User {uname} resolved to domain {resolved_pairs[uname]}")
+                    logger.info(f"User {uname} resolved to domain {resolved_pairs[uname]}")
             else:
                 if DEBUG_MODE:
-                    print(f"User {uname} has multiple domains: {user_domain_map[uname]}")
+                    logger.info(f"User {uname} has multiple domains: {user_domain_map[uname]}")
         else:
             if DEBUG_MODE:
-                print(f"User {uname} not found in Neo4j results")
+                logger.info(f"User {uname} not found in Neo4j results")
     resolved_domains = list(resolved_domains)  # Convert to a de-duplicated list
     if DEBUG_MODE:
-        print(f"The following domain(s) were identified for users on the {old_domain} domain: {resolved_domains}")
+        logger.info(f"The following domain(s) were identified for users on the {old_domain} domain: {resolved_domains}")
 
     # Step 3: Determine if all results point to the same domain
     if len(resolved_domains) == 1:
@@ -529,19 +538,19 @@ def domain_change_auto(old_domain, dcsync_file_lines):
         resolved_domain = resolved_domains.pop()
         return resolved_domain, {}
     elif len(resolved_domains) == 0:
-        print(f"No matching domains found in Neo4j for users under '{old_domain}'.")
+        logger.info(f"No matching domains found in Neo4j for users under '{old_domain}'.")
         return "", {}
     else:
         if list(resolved_pairs):  # If there was more than one domain, but some users had just one domain, fix those at least
-            print(f"Only able to fix some users automatically on the {old_domain} domain")
+            logger.info(f"Only able to fix some users automatically on the {old_domain} domain")
             return "PARTIAL", resolved_pairs
         else:
-            print(f"Failed to automatically resolve domain '{old_domain}'")
+            logger.info(f"Failed to automatically resolve domain '{old_domain}'")
             return "", {}
 
 
 def replace_dcsync_domain(old_domain, new_domain, dcsync_file_lines):
-    print(f"Updating {old_domain} domain in DCSync to {new_domain}")
+    logger.info(f"Updating {old_domain} domain in DCSync to {new_domain}")
 
     for i in range(len(dcsync_file_lines)):
         if "\\" in dcsync_file_lines[i]:
@@ -553,9 +562,9 @@ def replace_dcsync_domain(old_domain, new_domain, dcsync_file_lines):
 
 
 def replace_dcsync_domain_user_specific(resolved_pairs, dcsync_file_lines):
-    print("Updating specific users in DCSync file using auto resolved domain.")
+    logger.info("Updating specific users in DCSync file using auto resolved domain.")
     if DEBUG_MODE:
-        print(f"Resolved pairs: {resolved_pairs}")
+        logger.info(f"Resolved pairs: {resolved_pairs}")
 
     for i, line in enumerate(dcsync_file_lines):
         if "\\" in line:
@@ -566,7 +575,7 @@ def replace_dcsync_domain_user_specific(resolved_pairs, dcsync_file_lines):
                 old_line = dcsync_file_lines[i]
                 dcsync_file_lines[i] = f"{new_domain}\\{rest}"
                 if DEBUG_MODE:
-                    print(f"Updated line: {old_line} -> {dcsync_file_lines[i]}")
+                    logger.info(f"Updated line: {old_line} -> {dcsync_file_lines[i]}")
         else:
             # No domain present; extract username and prepend the resolved domain if available.
             username = line.split(":", 1)[0].strip().lower()
@@ -575,7 +584,7 @@ def replace_dcsync_domain_user_specific(resolved_pairs, dcsync_file_lines):
                 old_line = dcsync_file_lines[i]
                 dcsync_file_lines[i] = f"{new_domain}\\{line}"
                 if DEBUG_MODE:
-                    print(f"Updated line (no domain): {old_line} -> {dcsync_file_lines[i]}")
+                    logger.info(f"Updated line (no domain): {old_line} -> {dcsync_file_lines[i]}")
     return dcsync_file_lines
 
 
@@ -624,19 +633,20 @@ def create_user_database(dcsync_file_lines, cleartext_creds, enabled_users, pass
                 pass_repeat=pass_repeat,
                 email=None,
                 spray_user=False,
-                spray_password=False
+                spray_password=False,
+                job_title=None
             )
         )
 
     if skipped_lines:
         for skipped in skipped_lines:
-            print(skipped)
+            logger.info(skipped)
 
     return user_database
 
 
 def deduplicate_passwords(password_file_lines):
-    print("De-duplicating passwords")
+    logger.info("De-duplicating passwords")
     unique_lines = set()
     for line in password_file_lines:
         unique_lines.add(line)
@@ -668,7 +678,7 @@ def dehexify(password):
         # but only by replacing problematic characters
     except binascii.Error:
         # Handle the case where the hex conversion fails
-        print("ERROR: Could not dehexify the following value: ", password)
+        logger.error(" Could not dehexify the following value: ", password)
     return dehexed_password
 
 
@@ -1079,7 +1089,7 @@ def show_results(stat_enabled_shortest, stat_enabled_longest, stat_all_shortest,
                  text_terms, text_seasons, text_keyboard_walks,
                  text_custom_search, text_username_passwords, text_admin_pass_reuse, text_lm_hashes, text_cred_stuffing,
                  stat_spray_matches,
-                 stat_spray_pass_matches, user_database):
+                 stat_spray_pass_matches, user_database, machine_count=0):
     da_cracked, da_total = calc_da_cracked(user_database)
     stat_total_uniq, uniq_cracked_percent, stat_cracked_uniq = calculate_unique_hashes(user_database)
     avg_pass_len, student_avg_pass_len, enabled_avg_pass_len = average_pass_length(user_database)
@@ -1089,12 +1099,14 @@ def show_results(stat_enabled_shortest, stat_enabled_longest, stat_all_shortest,
 
     results_text = ""
 
-    print("")
-    print("")
-    print("")
-    print("=============================")
-    print("========== RESULTS ==========")
-    print("=============================")
+    logger.info("")
+    logger.info("")
+    logger.info("")
+    logger.info("=============================")
+    logger.info("========== RESULTS ==========")
+    logger.info("=============================")
+    if machine_count:
+        results_text += utils.print_and_log(f"Machine Accounts: {machine_count}", results_text)
     results_text += utils.print_and_log(
         f"Unique passwords cracked: {stat_cracked_uniq}/{stat_total_uniq} {uniq_cracked_percent}", results_text)
     results_text += utils.print_and_log(f"Total accounts cracked: {all_cracked}/{all_total} {all_crack_percent}",
@@ -1144,9 +1156,9 @@ def show_results(stat_enabled_shortest, stat_enabled_longest, stat_all_shortest,
     if stat_spray_pass_matches != 123456:
         utils.print_and_log(f"Number Enabled Accounts with Sprayable Passwords: {stat_spray_pass_matches}",
                             results_text)
-    print("")
-    print("")
-    print("")
+    logger.info("")
+    logger.info("")
+    logger.info("")
 
     return results_text
 
@@ -1157,7 +1169,7 @@ def write_cracked_file(printed_stats, file_datetime, user_database, result_enabl
                        result_custom_search, result_username_passwords, results_admin_pass_reuse, result_lm_hash_users,
                        result_blank_enabled, result_cred_stuffing):
     output_filename = f"passinspector_allcracked_{file_datetime}.txt"
-    print(f"Writing all cracked passwords to {output_filename}")
+    logger.info(f"Writing all cracked passwords to {output_filename}")
     results = ["USERNAME,PASSWORD,ENABLED,ADMIN,STUDENT"]
     for user in user_database:
         if user.cracked:
@@ -1168,7 +1180,7 @@ def write_cracked_file(printed_stats, file_datetime, user_database, result_enabl
             outfile.write(result + '\n')
 
     output_filename = f"passinspector_results_{file_datetime}.txt"
-    print(f"Writing each of the results to {output_filename}")
+    logger.info(f"Writing each of the results to {output_filename}")
     results = []
     results.append("=======================")
     results.append("RESULTS SUMMARY")
@@ -1289,7 +1301,7 @@ def parse_admin_file(l_admins_filename):
                 else:
                     l_admin_users.append(line)  # If no backslash, add the entire line to the admin_users list
     except FileNotFoundError:
-        print("ERROR: Could not find admins file:", l_admins_filename)
+        logger.error(" Could not find admins file:", l_admins_filename)
         exit()
     return l_admin_users
 
@@ -1345,7 +1357,7 @@ def filter_cleartext(dcsync_lines):
             cleartext_creds.append({"Domain": domain, "Username": username, "Password": line[2]})
 
     if cleartext_creds:
-        print(f"Cleartext Credentials Found: {len(cleartext_creds)}")
+        logger.info(f"Cleartext Credentials Found: {len(cleartext_creds)}")
     return dcsync_lines, cleartext_creds
 
 
@@ -1367,15 +1379,14 @@ def filter_machines(l_dcsync):
         else:
             machine_count += 1
 
-    print(f"Machine Accounts: {machine_count}")  # TODO: Move to results section
-    return filtered_dcsync
+    return filtered_dcsync, machine_count
 
 
 def filter_dcsync_file(dcsync_file_lines):
     dcsync_file_lines, cleartext_creds = filter_cleartext(dcsync_file_lines)  # Extract cleartext credentials
     dcsync_file_lines = filter_nonntlm(dcsync_file_lines)  # Filter out lines without NTLM Hashes
-    dcsync_file_lines = filter_machines(dcsync_file_lines)  # Filter out machine accounts
-    return dcsync_file_lines, cleartext_creds
+    dcsync_file_lines, machine_count = filter_machines(dcsync_file_lines)  # Filter out machine accounts
+    return dcsync_file_lines, cleartext_creds, machine_count
 
 
 def calc_duplicate_password_identifier(user_database):
@@ -1444,25 +1455,25 @@ def prepare_hashes(l_dcsync_filename, l_file_prefix):
 
     # Print Results
     if machine_count:
-        print(f"Number of Machine Accounts: {machine_count}")
+        logger.info(f"Number of Machine Accounts: {machine_count}")
     if cleartext_hashes:
-        print(f"Number of Cleartext Hashes: {len(cleartext_hashes)}")
+        logger.info(f"Number of Cleartext Hashes: {len(cleartext_hashes)}")
     if ntlm_hashes:
-        print(f"Number of NTLM Hashes: {len(ntlm_hashes)}")
-        print(f"Number of Unique NT Hashes: {len(just_nt_hashes)}")
+        logger.info(f"Number of NTLM Hashes: {len(ntlm_hashes)}")
+        logger.info(f"Number of Unique NT Hashes: {len(just_nt_hashes)}")
 
         # Output Results to File
         filename = f"{l_file_prefix}-NT_Hashes.txt"
         with open(filename, 'w') as file:
             for nt_hash in just_nt_hashes:
                 file.write(nt_hash + "\n")
-        print(f"\nUnique NT Hashes Written To: {filename}")
+        logger.info(f"\nUnique NT Hashes Written To: {filename}")
 
     exit()
 
 
 def parse_students(user_database, students_filename):
-    print("Parsing students")
+    logger.info("Parsing students")
     students = utils.file_to_userlist(students_filename)
     for user in user_database:
         for student in students:
@@ -1481,25 +1492,29 @@ def emails_from_neo4j(user_database):
                     "MATCH (u:User) "
                     "RETURN toUpper(u.samaccountname) AS username, "
                     "toUpper(u.domain) AS domain, "
-                    "u.email AS email"
+                    "u.email AS email, "
+                    "u.title AS title"
                 )
                 results = session.run(query)
                 # Build a mapping: (username, domain) -> email
-                user_email_map = {}
+                user_info_map = {}
                 for record in results:
                     uname = record["username"]
                     dom = record["domain"] if record["domain"] is not None else "NONE"
                     email = record["email"]
-                    user_email_map[(uname, dom)] = email
+                    title = record["title"]
+                    user_info_map[(uname, dom)] = (email, title)
 
                 # Update each user in the database using the mapping
                 for user in user_database:
                     uname = user.username.upper()
                     dom = user.domain.upper() if user.domain else "NONE"
-                    user.email = user_email_map.get((uname, dom), None)
+                    info = user_info_map.get((uname, dom), (None, None))
+                    user.email = info[0]
+                    user.job_title = info[1]
             return user_database
     except Exception as e:
-        print(f"ERROR: Neo4j query failed, unable to pull user emails - {e}")
+        logger.info(f"ERROR: Neo4j query failed, unable to pull user emails - {e}")
         return user_database
 
 
@@ -1507,11 +1522,11 @@ def testNeo4jConnectivity():
     try:
         with GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USERNAME, NEO4J_PASSWORD)) as driver:
             driver.verify_connectivity()
-            print("Successfully connected to Neo4j database")
+            logger.info("Successfully connected to Neo4j database")
             return True
     except Exception as e:
-        print("ERROR: Could not connect to Neo4j. If Neo4j information was provided, please check it is accurate.")
-        print(e)
+        logger.error("Could not connect to Neo4j. If Neo4j information was provided, please check it is accurate.")
+        logger.error(e)
         return False
 
 
@@ -1520,27 +1535,27 @@ def retrieve_cred_stuffing_results(cred_stuffing_domains):
     try:
         import BreachCreds
     except ImportError:
-        print("Unable to find BreachCreds.py in the current directory, skipping credential stuffing checks")
+        logger.info("Unable to find BreachCreds.py in the current directory, skipping credential stuffing checks")
         return []
 
     cred_stuffing_accounts = []
     if cred_stuffing_domains:
         # If a credential-stuffing domain was specified, use that
-        print("Searching DeHashed for credential stuffing results (This may take some time)")
+        logger.info("Searching DeHashed for credential stuffing results (This may take some time)")
         dehashed_results = BreachCreds.main(cred_stuffing_domains.split(','), display=False, write_files=False)
         if dehashed_results:
             dehashed_results_with_passwords = [entry for entry in dehashed_results if 'Password' in entry]
             if dehashed_results_with_passwords:
-                print(f"Found {len(dehashed_results_with_passwords)} result(s) from DeHashed with passwords")
+                logger.info(f"Found {len(dehashed_results_with_passwords)} result(s) from DeHashed with passwords")
                 for result in dehashed_results_with_passwords:
                     username = result["Username"]
                     password = result["Password"]
                     cred_stuffing_accounts.append({'USERNAME': username, 'PASSWORD': password})
             else:
-                print("No DeHashed results with passwords returned for credential stuffing checks")
+                logger.info("No DeHashed results with passwords returned for credential stuffing checks")
                 return []
         else:
-            print("No DeHashed results returned for credential stuffing checks")
+            logger.info("No DeHashed results returned for credential stuffing checks")
             return []
     elif NEO4J_PASSWORD:
         # If a Neo4j password was specified, use that
@@ -1555,32 +1570,32 @@ def retrieve_cred_stuffing_results(cred_stuffing_domains):
                     if match:
                         domains.append(match.group(1))
         except Exception as e:
-            print(f"ERROR: Neo4j query failed, unable to search for domains - {e}")
+            logger.info(f"ERROR: Neo4j query failed, unable to search for domains - {e}")
             return []
         if domains:
-            print(f"Retrieved {len(domains)} domain(s) from Neo4j, searching DeHashed (This may take some time)")
+            logger.info(f"Retrieved {len(domains)} domain(s) from Neo4j, searching DeHashed (This may take some time)")
             dehashed_results = BreachCreds.main(domains, display=False, write_files=False)
             # dehashed_results = [{'Username': 'user1@example.com'},{'Username': 'user2@example.com', 'Password': 'Password123'},{'Username': 'user3@example.com'},{'Username': 'user4@example.com', 'Password': 'Password456'}]
             if dehashed_results:
                 dehashed_results_with_passwords = [entry for entry in dehashed_results if 'Password' in entry]
                 if dehashed_results_with_passwords:
-                    print(f"Found {len(dehashed_results_with_passwords)} result(s) from DeHashed with passwords")
+                    logger.info(f"Found {len(dehashed_results_with_passwords)} result(s) from DeHashed with passwords")
                     for result in dehashed_results_with_passwords:
                         username = result["Username"]
                         password = result["Password"]
                         cred_stuffing_accounts.append({'USERNAME': username, 'PASSWORD': password})
                 else:
-                    print("No DeHashed results with passwords returned for credential stuffing checks")
+                    logger.info("No DeHashed results with passwords returned for credential stuffing checks")
                     return []
             else:
-                print("No DeHashed results returned for credential stuffing checks")
+                logger.info("No DeHashed results returned for credential stuffing checks")
                 return []
         else:
-            print("No domains returned from Neo4j for DeHashed search. Moving on.")
+            logger.info("No domains returned from Neo4j for DeHashed search. Moving on.")
             return []
     else:
         # This should never happen, but just to be safe...
-        print("ERROR: Unknown credential stuffing search error, skipping")
+        logger.error(" Unknown credential stuffing search error, skipping")
         return []
 
     # If DeHashed results returned, write the DeHashed results to a file
@@ -1608,7 +1623,7 @@ def get_cred_stuffing(cred_stuffing_filename, cred_stuffing_domains, search_deha
 
 def write_dehashed_file(cred_stuffing_accounts):
     output_filename = f"passinspector_dehashed_results.txt"
-    print(f"Writing DeHashed results locally to {output_filename}")
+    logger.info(f"Writing DeHashed results locally to {output_filename}")
     results = []
     for record in cred_stuffing_accounts:
         results.append(record)
@@ -1621,14 +1636,14 @@ def write_dehashed_file(cred_stuffing_accounts):
 def import_dehashed_file():
     # If a local DeHashed file exists, read from that
     import_filename = f"passinspector_dehashed_results.txt"
-    print("Importing DeHashed results from local file")
+    logger.info("Importing DeHashed results from local file")
     file = open(import_filename)
     data = json.load(file)
     cred_stuffing_accounts = []
     for i in data:
         cred_stuffing_accounts.append(i)
     file.close()
-    print(f"{len(cred_stuffing_accounts)} DeHashed result(s) imported from local file")
+    logger.info(f"{len(cred_stuffing_accounts)} DeHashed result(s) imported from local file")
     return cred_stuffing_accounts
 
 
@@ -1693,16 +1708,16 @@ def get_filenames(file_datetime, dcsync_filename, passwords_filename):
     if not dcsync_filename:
         dcsync_filename = find_file([file_datetime, "dcsync"])
         if dcsync_filename:
-            print(f"No DCSync file was provided, but a DCSync file was found: {dcsync_filename}")
+            logger.info(f"No DCSync file was provided, but a DCSync file was found: {dcsync_filename}")
         else:
-            print("ERROR: No DCSync file provided or located automatically. Cannot continue!")
+            logger.error(" No DCSync file provided or located automatically. Cannot continue!")
             exit()
     if not passwords_filename:
         passwords_filename = find_file([file_datetime, "cracked"], ['allcracked'])
         if passwords_filename:
-            print(f"No cracked file was provided, but a cracked file was found: {passwords_filename}")
+            logger.info(f"No cracked file was provided, but a cracked file was found: {passwords_filename}")
         else:
-            print("ERROR: No cracked file file provided or located automatically. Cannot continue!")
+            logger.error(" No cracked file file provided or located automatically. Cannot continue!")
             exit()
 
     return file_datetime, dcsync_filename, passwords_filename

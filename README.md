@@ -63,17 +63,34 @@ PassInspector generates three output files:
 5. `pip install -r requirements.txt`
 6. `python3 passinspector/passinspector.py`
 
+### Configuration
+PassInspector now reads Neo4j connection information from environment variables:
+
+```
+PASSINSPECTOR_NEO4J_URI
+PASSINSPECTOR_NEO4J_USERNAME
+PASSINSPECTOR_NEO4J_PASSWORD
+```
+
+If these are not set, default values of `neo4j://localhost`, `neo4j`, and
+`bloodhoundcommunityedition` are used.
+
+Logging output replaces previous print statements. Use `-db` to enable debug
+mode (sets log level to DEBUG).
+
 ## To do
 
-* Fix file imports so none require .txt or .csv
-* Add ability to skip Neo4j checks
-* Add job titles to output Excel doc as they may be useful
+* Fix file imports so none require .txt or .csv - **Completed**
+* Add ability to skip Neo4j checks - **Completed** (`--skip-neo4j`)
+* Add job titles to output Excel doc as they may be useful - **Completed**
 
 ## Usage
 
 ```bash
-python3 passinspector/passinspector.py -d <dcsync-file> -p <password-file> [-a <admin-users-file> -c <custom-search-terms> -e <enabled-users-file> -sp <spray-passwords-file> -su <spray-users-file> -lh <local-hashes-file> -cs <credential-stuffing-file> -csd <cred-stuffing-domains> -db -nd -dpi -fp <file-prefix>]
+python3 passinspector/passinspector.py -d <dcsync-file> -p <password-file> [-a <admin-users-file> -c <custom-search-terms> -e <enabled-users-file> -sp <spray-passwords-file> -su <spray-users-file> -lh <local-hashes-file> -cs <credential-stuffing-file> -csd <cred-stuffing-domains> -db -nd -dpi -fp <file-prefix> --skip-neo4j]
 ```
+
+Input file names no longer require extensions. If `.txt`, `.csv`, or `.json` exists it will be used automatically.
 
 **Example**
 Just running the script will return the shortest, longest, and most used password. Also, common passwords such as "password" and "qwerty" will be checked. The file should be a list of passwords. If there are hashes and/or usernames in the list, they should be separated from the passwords by a colon `:` and the password should be the last item on the line.
@@ -168,6 +185,7 @@ Parameter | Description
 -k, --kerberoastable-users | (Optional) File containing Kerberoastable users. Overrides automatic Neo4j queries.
 -lh, --local-hashes | (Optional) LSASS dump file to check for local account password reuse.
 -nd, --no-dehashed | (Optional) Skip DeHashed search.
+-\-, --skip-neo4j | (Optional) Skip all Neo4j checks and queries.
 -nh, --neo4j-hostname | (Optional) Neo4j hostname or IP (default: localhost).
 -nu, --neo4j-username | (Optional) Neo4j username (default: neo4j).
 -np, --neo4j-password | (Optional) Neo4j password (required for automatic queries).

@@ -1,7 +1,11 @@
 import argparse
 import json
+import logging
 from neo4j import GraphDatabase
+import os
 import re
+
+logger = logging.getLogger(__name__)
 
 
 def fix_bad_passwords(user_database):
@@ -20,6 +24,11 @@ def file_to_userlist(filename=None):
     if not filename:
         return []
     filename = filename.strip().lower()
+    if not os.path.exists(filename):
+        for ext in ('.txt', '.csv', '.json'):
+            if os.path.exists(filename + ext):
+                filename = filename + ext
+                break
     if filename.endswith('.json'):  # Handle Bloodhound CE JSON exports
         users = read_json_file(filename)
     elif filename.endswith('.txt'):
@@ -56,7 +65,7 @@ def file_to_userlist(filename=None):
                 else:
                     users.append({'USERNAME': line, 'DOMAIN': None})
     else:
-        print("ERROR: Do not recognize file extension: ", filename)
+        logger.error(f"Do not recognize file extension: {filename}")
         return []
 
     return users
@@ -142,17 +151,23 @@ def gather_arguments():
                                                          'in the spray list.')
 
     parser.add_argument('-su', '--spray-users', help='(OPTIONAL) Match cracked users to list of usernames '
-                                                     'that will be sprayed.')
+                                                    'that will be sprayed.')
+
+    parser.add_argument('--skip-neo4j', action='store_true',
+                        help='Skip all Neo4j connectivity checks and queries')
 
     # Parse the command-line arguments
     args = parser.parse_args()
 
     global DEBUG_MODE
     DEBUG_MODE = args.debug
+    if DEBUG_MODE:
+        logging.getLogger().setLevel(logging.DEBUG)
 
     return (args.dcsync, args.passwords, args.spray_users, args.spray_passwords, args.duplicate_password_identifier,
             args.no_dehashed, args.cred_stuffing_domains, args.prepare_hashes, args.custom, args.neo4j_hostname, args.neo4j_username,
-            args.neo4j_password, args.students, args.local_hashes, args.cred_stuffing, args.admins, args.enabled, args.kerberoastable_users)
+            args.neo4j_password, args.students, args.local_hashes, args.cred_stuffing, args.admins, args.enabled,
+            args.kerberoastable_users, args.skip_neo4j)
 
 
 def group_lookup(query, group_filename, neo4j_uri, neo4j_user, neo4j_pass, neo4j_queries):
@@ -193,26 +208,31 @@ def neo4j_query(query_string, neo4j_uri, neo4j_user, neo4j_pass):
                     users.append({'USERNAME': username, 'DOMAIN': domain})
             return users
     except Exception as e:
-        print(f"ERROR: Neo4j query failed, unable to pull users - {e}")
+        logger.error(f"Neo4j query failed, unable to pull users - {e}")
         return []
 
 
 def print_and_log(message, log):
-    print(message)
+    logger.info(message)
     log = message + "\n"
     return log
 
 
 def open_file(l_filename):
-    print(f"Opening {l_filename}")
+    logger.info(f"Opening {l_filename}")
     lines = []
     try:
+        if not os.path.exists(l_filename):
+            for ext in ('.txt', '.csv'):
+                if os.path.exists(l_filename + ext):
+                    l_filename = l_filename + ext
+                    break
         with open(l_filename, 'r') as file:
             for line in file:
                 if line:
                     lines.append(line.strip())
     except FileNotFoundError:
-        print(f"ERROR: Could not find file using the filename provided: {l_filename}")
+        logger.error(f"Could not find file using the filename provided: {l_filename}")
         exit(1)
     return lines
 
@@ -223,10 +243,10 @@ def read_json_file(file_path):
         with open(file_path, 'r', encoding="utf-8-sig") as file:
             json_data = json.load(file)
     except FileNotFoundError:
-        print(f"Error: File '{file_path}' not found.")
+        logger.error(f"File '{file_path}' not found.")
         return None
     except json.JSONDecodeError as e:
-        print(f"Error: Failed to decode JSON in file '{file_path}': {e}")
+        logger.error(f"Failed to decode JSON in file '{file_path}': {e}")
         return None
 
     # decide which structure we're dealing with
@@ -235,7 +255,7 @@ def read_json_file(file_path):
     elif isinstance(json_data, list):
         records = json_data
     else:
-        print(f"Error: Unexpected JSON structure (got {type(json_data)}).")
+        logger.error(f"Unexpected JSON structure (got {type(json_data)}).")
         return None
 
     formatted_usernames = []
@@ -246,7 +266,7 @@ def read_json_file(file_path):
         elif isinstance(entry, dict) and 'u.samaccountname' in entry:
             raw = entry['u.samaccountname']
         else:
-            print(f"Warning: skipping unrecognized entry: {entry}")
+            logger.warning(f"Skipping unrecognized entry: {entry}")
             continue
 
         parts = raw.split('@', 1)

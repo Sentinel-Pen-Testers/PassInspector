@@ -1,14 +1,17 @@
+import logging
 import xlsxwriter
+
+logger = logging.getLogger(__name__)
 
 HEADERS = [
     'DOMAIN', 'USERNAME', 'LMHASH', 'NTHASH', 'PASSWORD', 'CRACKED', 'HAS_LM',
     'BLANK_PASSWORD', 'ENABLED', 'IS_ADMIN', 'KERBEROASTABLE', 'STUDENT',
-    'LOCAL_PASS_REPEAT', 'PASS_REPEAT_COUNT', 'SPRAY_USER', 'SPRAY_PASSWORD', 'EMAIL'
+    'LOCAL_PASS_REPEAT', 'PASS_REPEAT_COUNT', 'SPRAY_USER', 'SPRAY_PASSWORD', 'EMAIL', 'JOB_TITLE'
 ]
 
 HIDE_COLUMNS = {'LMHASH', 'NTHASH'}
 CONDITIONAL_HIDE_COLUMNS = {'ENABLED', 'IS_ADMIN', 'KERBEROASTABLE', 'STUDENT',
-                            'LOCAL_PASS_REPEAT', 'SPRAY_USER', 'SPRAY_PASSWORD', 'EMAIL'}
+                            'LOCAL_PASS_REPEAT', 'SPRAY_USER', 'SPRAY_PASSWORD', 'EMAIL', 'JOB_TITLE'}
 
 
 def create_formats(workbook):
@@ -37,7 +40,7 @@ def prepare_data(user_database):
             str(user.cracked), str(user.has_lm), str(user.blank_password),
             str(user.enabled), str(user.is_admin), str(user.kerberoastable),
             str(user.student), user.local_pass_repeat, user.pass_repeat,
-            user.spray_user, user.spray_password, user.email
+            user.spray_user, user.spray_password, user.email, user.job_title
         ]
         data.append(values)
 
@@ -52,7 +55,7 @@ def prepare_data(user_database):
 def write_xlsx(file_date, user_database):
     """Writes user data to an Excel file with formatting and hidden columns."""
     out_filename = f"passinspector_results_{file_date}.xlsx"
-    print(f"Writing results in Excel format to {out_filename}")
+    logger.info(f"Writing results in Excel format to {out_filename}")
 
     with xlsxwriter.Workbook(out_filename) as workbook:
         worksheet = workbook.add_worksheet()
