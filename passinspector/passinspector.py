@@ -89,6 +89,10 @@ def main(dcsync_filename="", passwords_filename="", file_prefix="", prepare_hash
                             'What is the file prefix for these files? ')
         file_prefix = file_prefix.strip()
 
+    # If user just wants to prepare hashes, just do that and exit
+    if args.prepare_hashes:
+        prepare_hashes(dcsync_filename, file_prefix)
+        
     # Parse Neo4j arguments, if provided
     global NO_NEO4J
     NO_NEO4J = no_neo4j
