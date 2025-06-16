@@ -7,8 +7,8 @@ import os
 import re
 import sys
 from tqdm import tqdm
-from . import utils
-from . import export_xlsx
+import utils
+import export_xlsx
 
 DEBUG_MODE = False
 NEO4J_PASSWORD = "bloodhoundcommunityedition"
@@ -79,12 +79,12 @@ def main(dcsync_filename="", passwords_filename="", file_prefix="", prepare_hash
          duplicate_password_identifier, no_dehashed, cred_stuffing_domains, prepare_hashes_mode, custom,
          neo4j_hostname, neo4j_username, neo4j_password, students_filename, local_hash_filename,
          cred_stuffing_filename, admins_filename, enabled_users_filename, kerberoastable_filename,
-         no_neo4j) = utils.gather_arguments()
+         no_neo4j, file_prefix) = utils.gather_arguments()
     # Handle user error in the provided variables
     cred_stuffing_domains, search_terms = utils.parse_arguments(cred_stuffing_domains, custom)
 
     # Handle situation where no arguments were provided.
-    if not dcsync_filename or not passwords_filename:
+    if (not dcsync_filename or not passwords_filename) and not file_prefix:
         file_prefix = input('No arguments provided for DCSync or cracked password file. '
                             'What is the file prefix for these files? ')
         file_prefix = file_prefix.strip()
@@ -112,17 +112,28 @@ def main(dcsync_filename="", passwords_filename="", file_prefix="", prepare_hash
         NEO4J_PASSWORD = ""
     elif NO_NEO4J:
         NEO4J_PASSWORD = ""
+    else:
+        print("Successfully connected to Neo4j database")
 
     # Designed to figure out what actions will need to take place depending on the file types provided
-    file_datetime, dcsync_filename, passwords_filename = get_filenames(file_prefix, dcsync_filename,
-                                                                       passwords_filename)
+    (file_datetime,
+     dcsync_filename,
+     passwords_filename,
+     local_hash_filename,
+     spray_users_filename,
+     spray_passwords_filename) = utils.get_filenames(file_prefix,
+                                                     dcsync_filename,
+                                                     passwords_filename,
+                                                     local_hash_filename,
+                                                     spray_users_filename,
+                                                     spray_passwords_filename)
     dcsync_results = []  # All results and values
     user_database_cracked = []  # Values for any cracked user credential
 
-    dcsync_file_lines = utils.open_file(dcsync_filename)
+    dcsync_file_lines = utils.open_file(dcsync_filename, DEBUG_MODE)
     dcsync_file_lines, cleartext_creds = filter_dcsync_file(dcsync_file_lines)
 
-    password_file_lines = utils.open_file(passwords_filename)
+    password_file_lines = utils.open_file(passwords_filename, DEBUG_MODE)
     password_file_lines = deduplicate_passwords(password_file_lines)
 
     cred_stuffing_accounts = get_cred_stuffing(cred_stuffing_filename, cred_stuffing_domains, no_dehashed)
@@ -156,7 +167,7 @@ def main(dcsync_filename="", passwords_filename="", file_prefix="", prepare_hash
             user_database_cracked.append(user)
 
     # Create a progress bar with eight steps
-    pbar = tqdm(total=8, desc="Calculating statistics", ncols=100)
+    pbar = tqdm(total=8, desc="Calculating statistics", ncols=100, leave=False)
     # Step 1: Calculate password lengths for enabled and all users
     stat_enabled_shortest, stat_enabled_longest, result_enabled_shortest_passwords, result_enabled_longest_passwords, \
         stat_all_shortest, stat_all_longest, result_all_shortest_passwords, result_all_longest_passwords = \
@@ -222,7 +233,8 @@ def check_if_spray(user_database, spray_users_filename, spray_passwords_filename
 
     # Step 1: Fetch emails from Neo4j if Neo4j connectivity is available
     if neo4j_connectivity:
-        print("Fetching emails from Neo4j...")
+        if DEBUG_MODE:
+            print("Fetching emails from Neo4j...")
         user_database = emails_from_neo4j(user_database)
 
     # Step 2: Import data from external spray users file if provided
@@ -286,7 +298,7 @@ def check_if_spray(user_database, spray_users_filename, spray_passwords_filename
                 num_spray_matches += 1
             if user.spray_password and user.enabled:
                 num_pass_spray_matches += 1
-    else:
+    elif DEBUG_MODE:
         print("No spray password file supplied. Cannot calculate stats.")
 
     return user_database, num_spray_matches, num_pass_spray_matches
@@ -305,7 +317,7 @@ def check_domains(dcsync_file_lines, admin_users, enabled_users, kerberoastable_
     # ------------------------------------------------------------
     # Phase 1: Extract domains from DCSync file lines
     # ------------------------------------------------------------
-    for line in tqdm(dcsync_file_lines, desc="Extracting domains from DCSync", ncols=80):
+    for line in tqdm(dcsync_file_lines, desc="Extracting domains from DCSync", ncols=80, leave=False):
         try:
             parts = line.split(':')
             domain_user_combined = parts[0].split('\\', 1)
@@ -319,11 +331,11 @@ def check_domains(dcsync_file_lines, admin_users, enabled_users, kerberoastable_
     # ------------------------------------------------------------
     # Phase 2: Extract domains from imported user lists
     # ------------------------------------------------------------
-    for user in tqdm(admin_users, desc="Processing admin users", ncols=80):
+    for user in tqdm(admin_users, desc="Processing admin users", ncols=80, leave=False):
         imported_domains.add(user['DOMAIN'].lower())
-    for user in tqdm(enabled_users, desc="Processing enabled users", ncols=80):
+    for user in tqdm(enabled_users, desc="Processing enabled users", ncols=80, leave=False):
         imported_domains.add(user['DOMAIN'].lower())
-    for user in tqdm(kerberoastable_users, desc="Processing kerberoastable users", ncols=80):
+    for user in tqdm(kerberoastable_users, desc="Processing kerberoastable users", ncols=80, leave=False):
         imported_domains.add(user['DOMAIN'].lower())
 
     if DEBUG_MODE:
@@ -333,10 +345,10 @@ def check_domains(dcsync_file_lines, admin_users, enabled_users, kerberoastable_
     # ------------------------------------------------------------
     # Phase 3: Compare domains to find uniques
     # ------------------------------------------------------------
-    for domain in tqdm(imported_domains, desc="Comparing imported domains", ncols=80):
+    for domain in tqdm(imported_domains, desc="Comparing imported domains", ncols=80, leave=False):
         if domain not in dcsync_domains:
             unique_domains_imported.add(domain)
-    for domain in tqdm(dcsync_domains, desc="Comparing DCSync domains", ncols=80):
+    for domain in tqdm(dcsync_domains, desc="Comparing DCSync domains", ncols=80, leave=False):
         if domain not in imported_domains:
             unique_domains_dcsync.add(domain)
 
@@ -604,7 +616,7 @@ def create_user_database(dcsync_file_lines, cleartext_creds, enabled_users, pass
     skipped_lines = []
 
     # Wrap the iteration over the DCSync file lines with a tqdm progress bar
-    for line in tqdm(dcsync_file_lines, desc="Importing users"):
+    for line in tqdm(dcsync_file_lines, desc="Importing users", leave=False):
         # Split the line into its components (assuming the format: DOMAIN\USERNAME:RID:LMHASH:NTHASH:::)
         try:
             domain_user, rid, lmhash, nthash, *_ = line.split(':')  # Extract and discard RID
@@ -658,7 +670,8 @@ def create_user_database(dcsync_file_lines, cleartext_creds, enabled_users, pass
 
 
 def deduplicate_passwords(password_file_lines):
-    print("De-duplicating passwords")
+    if DEBUG_MODE:
+        print("De-duplicating passwords")
     unique_lines = set()
     for line in password_file_lines:
         unique_lines.add(line)
@@ -1428,7 +1441,7 @@ def add_cleartext_creds(user_database, cleartext_creds):
 
 
 def count_pass_repeat(user_database):
-    for user in tqdm(user_database, desc="Counting password repeats (May take a while)", ncols=80, file=sys.stdout):
+    for user in tqdm(user_database, desc="Counting password repeats (May take a while)", ncols=80, file=sys.stdout, leave=False):
         pass_repeat_count = sum(1 for other_user in user_database if user.nthash == other_user.nthash)
         user.pass_repeat = pass_repeat_count
     return user_database
@@ -1440,7 +1453,7 @@ def prepare_hashes(l_dcsync_filename, l_file_prefix):
     machine_count = 0
     ntlm_hashes = []
 
-    dcsync_lines = utils.open_file(l_dcsync_filename)
+    dcsync_lines = utils.open_file(l_dcsync_filename, DEBUG_MODE)
     dcsync_lines, cleartext_hashes = filter_cleartext(dcsync_lines)
     dcsync_lines = filter_nonntlm(dcsync_lines)
     dcsync_lines = filter_machines(dcsync_lines)
@@ -1545,11 +1558,8 @@ def testNeo4jConnectivity():
     try:
         with GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USERNAME, NEO4J_PASSWORD)) as driver:
             driver.verify_connectivity()
-            print("Successfully connected to Neo4j database")
             return True
     except Exception as e:
-        print("ERROR: Could not connect to Neo4j. If Neo4j information was provided, please check it is accurate.")
-        print(e)
         return False
 
 
@@ -1633,7 +1643,7 @@ def retrieve_cred_stuffing_results(cred_stuffing_domains):
 
 def get_cred_stuffing(cred_stuffing_filename, cred_stuffing_domains, search_dehashed):
     if cred_stuffing_filename:
-        cred_stuffing_accounts = utils.open_file(cred_stuffing_filename)
+        cred_stuffing_accounts = utils.open_file(cred_stuffing_filename, DEBUG_MODE)
     elif os.path.isfile("passinspector_dehashed_results.txt"):
         cred_stuffing_accounts = import_dehashed_file()
     elif (cred_stuffing_domains or (NEO4J_PASSWORD and not NO_NEO4J)) and search_dehashed:
@@ -1705,57 +1715,6 @@ def count_local_hash(user_database):
         if user.local_pass_repeat > 0:
             local_hash_count += 1
     return local_hash_count
-
-
-def find_file(include=None, exclude=None):
-    # include and exclude should be lists
-
-    if not include:
-        include = []
-    if not exclude:
-        exclude = []
-
-    file_list = list_files_recursive()
-    for file_name in file_list:
-        complete_match = len(include)
-        for arg in include:
-            if arg.lower() in file_name.lower():
-                complete_match -= 1
-        for arg in exclude:
-            if arg.lower() in file_name.lower():
-                complete_match += 1
-        if complete_match == 0:
-            return file_name
-
-
-def get_filenames(file_datetime, dcsync_filename, passwords_filename):
-    if not file_datetime:
-        file_datetime = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    if not dcsync_filename:
-        dcsync_filename = find_file([file_datetime, "dcsync"])
-        if dcsync_filename:
-            print(f"No DCSync file was provided, but a DCSync file was found: {dcsync_filename}")
-        else:
-            print("ERROR: No DCSync file provided or located automatically. Cannot continue!")
-            exit()
-    if not passwords_filename:
-        passwords_filename = find_file([file_datetime, "cracked"], ['allcracked'])
-        if passwords_filename:
-            print(f"No cracked file was provided, but a cracked file was found: {passwords_filename}")
-        else:
-            print("ERROR: No cracked file file provided or located automatically. Cannot continue!")
-            exit()
-
-    return file_datetime, dcsync_filename, passwords_filename
-
-
-def list_files_recursive(directory='.'):
-    import os
-    files_list = []
-    for root, dirs, files in os.walk(directory):
-        for file in files:
-            files_list.append(os.path.join(root, file))
-    return files_list
 
 
 if __name__ == '__main__':
