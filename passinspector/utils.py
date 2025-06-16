@@ -2,6 +2,8 @@ import argparse
 import json
 from neo4j import GraphDatabase
 import re
+from datetime import datetime
+from pathlib import Path
 
 
 def fix_bad_passwords(user_database):
@@ -60,6 +62,34 @@ def file_to_userlist(filename=None):
         return []
 
     return users
+
+
+def find_file(include=None, exclude=None):
+    """
+    Search recursively from the current directory for the first file whose
+    full path contains all 'include' terms and none of the 'exclude' terms.
+
+    Args:
+        include (list of str): Substrings that must be present in the path
+        exclude (list of str): Substrings that must NOT be present in the path
+
+    Returns:
+        str or None: The matching file path as a string, or None if not found
+    """
+    include = include or []
+    exclude = exclude or []
+
+    for file_path in Path(".").rglob("*"):
+        if not file_path.is_file():
+            continue
+
+        full_path_str = str(file_path).lower()
+
+        if all(term.lower() in full_path_str for term in include) and \
+           not any(term.lower() in full_path_str for term in exclude):
+            return str(file_path)
+
+    return None
 
 
 def gather_arguments():
@@ -156,7 +186,46 @@ def gather_arguments():
     return (args.dcsync, args.passwords, args.spray_users, args.spray_passwords, args.duplicate_password_identifier,
             args.no_dehashed, args.cred_stuffing_domains, args.prepare_hashes, args.custom, args.neo4j_hostname, args.neo4j_username,
             args.neo4j_password, args.students, args.local_hashes, args.cred_stuffing, args.admins, args.enabled,
-            args.kerberoastable_users, args.no_neo4j)
+            args.kerberoastable_users, args.no_neo4j, args.file_prefix)
+
+
+def get_filenames(file_datetime, dcsync_filename, passwords_filename, local_hash_filename, spray_users_filename, spray_passwords_filename):
+    if not file_datetime:
+        file_datetime = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    if not dcsync_filename:
+        dcsync_filename = find_file([file_datetime, "dcsync"])
+        if dcsync_filename:
+            print(f"No DCSync file was provided, but a DCSync file was found: {dcsync_filename}")
+        else:
+            print("ERROR: No DCSync file provided or located automatically. Cannot continue!")
+            exit()
+
+    if not passwords_filename:
+        passwords_filename = find_file([file_datetime, "cracked"], ['allcracked'])
+        if passwords_filename:
+            print(f"No cracked file was provided, but a cracked file was found: {passwords_filename}")
+        else:
+            print("ERROR: No cracked file file provided or located automatically. Cannot continue!")
+            exit()
+
+    if not local_hash_filename:
+        local_hash_filename = find_file([file_datetime, "lsass"])
+        if local_hash_filename:
+            print(f"No list of local password hashes file was provided, but a file was found: {local_hash_filename}")
+
+    if not spray_users_filename:
+        spray_users_filename = find_file([file_datetime, "userlist"])
+        if spray_users_filename:
+            print(f"No list of sprayable users was provided, but a file was found: {spray_users_filename}")
+
+    if not spray_passwords_filename:
+        spray_passwords_filename = find_file([file_datetime, "passwords"])
+        if spray_users_filename:
+            print(f"No list of sprayable passwords was provided, but a file was found: {spray_users_filename}")
+
+
+    return file_datetime, dcsync_filename, passwords_filename, local_hash_filename, spray_users_filename, spray_passwords_filename
 
 
 def group_lookup(query, group_filename, neo4j_uri, neo4j_user, neo4j_pass, neo4j_queries, no_neo4j=False):
@@ -180,6 +249,15 @@ def parse_arguments(cred_stuffing_domains, custom):
         search_terms = []
 
     return cred_stuffing_domains, search_terms
+
+
+def list_files_recursive(directory='.'):
+    import os
+    files_list = []
+    for root, dirs, files in os.walk(directory):
+        for file in files:
+            files_list.append(os.path.join(root, file))
+    return files_list
 
 
 def neo4j_query(query_string, neo4j_uri, neo4j_user, neo4j_pass):
@@ -207,8 +285,9 @@ def print_and_log(message, log):
     return log
 
 
-def open_file(l_filename):
-    print(f"Opening {l_filename}")
+def open_file(l_filename, debug_mode=False):
+    if debug_mode:
+        print(f"Opening {l_filename}")
     lines = []
     try:
         with open(l_filename, 'r') as file:
