@@ -63,11 +63,6 @@ PassInspector generates three output files:
 5. `pip install -r requirements.txt`
 6. `python3 passinspector/passinspector.py`
 
-## To do
-
-* Fix file imports so none require .txt or .csv
-* Add ability to skip Neo4j checks
-
 ## Usage
 
 ```bash
