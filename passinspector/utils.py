@@ -5,6 +5,9 @@ import re
 from datetime import datetime
 from pass_inspector_args import PassInspectorArgs
 
+# default debug mode value; updated by gather_arguments
+DEBUG_MODE = False
+
 
 def fix_bad_passwords(user_database):
     for user in user_database:
@@ -19,47 +22,64 @@ def check_group_member(user_database, group_members, attribute):
 
 
 def file_to_userlist(filename=None):
+    """Return a list of users from a variety of file formats.
+
+    The function will attempt to detect the file type automatically. Supported
+    structures include JSON exports (such as from BloodHound), comma separated
+    values, or plain newline separated text files containing users.
+    """
+
     if not filename:
         return []
-    filename = filename.strip().lower()
-    if filename.endswith('.json'):  # Handle Bloodhound CE JSON exports
-        users = read_json_file(filename)
-    elif filename.endswith('.txt'):
-        users = []
-        with open(filename, 'r') as file:
-            for line in file:
-                line = line.rstrip('\n')
-                if '@' in line:
-                    parts = line.split('@')
-                    users.append({'USERNAME': parts[0], 'DOMAIN': parts[1]})
-                elif '\\' in line:
-                    parts = line.split('\\')
-                    users.append({'USERNAME': parts[1], 'DOMAIN': parts[0]})
-                elif '/' in line:
-                    parts = line.split('/')
-                    users.append({'USERNAME': parts[1], 'DOMAIN': parts[0]})
-                else:
-                    # Handle lines with only the username and no domain
-                    users.append({'USERNAME': line, 'DOMAIN': None})
-    elif filename.endswith('.csv'):  # Handle Neo4J CSV Exports:
-        users = []
-        with open(filename, 'r', encoding='utf-8') as file:
-            lines = file.readlines()[1:]  # Read all lines and skip the first one
-            for line in lines:
-                line = line.rstrip('\n')
-                line = line.replace('"', '')
 
-                if "@" in line:
-                    line = line.split("@")
-                    users.append({'USERNAME': line[0], 'DOMAIN': line[1]})
-                elif "," in line:
-                    line = line.split(",")
-                    users.append({'USERNAME': line[0], 'DOMAIN': line[1]})
-                else:
-                    users.append({'USERNAME': line, 'DOMAIN': None})
-    else:
-        print("ERROR: Do not recognize file extension: ", filename)
+    filename = filename.strip()
+
+    # Try JSON first since json.load will raise an error if it's not JSON
+    users = read_json_file(filename)
+    if users is not None:
+        if DEBUG_MODE:
+            print(f"[DEBUG] {filename} detected as JSON")
+        return users
+
+    # Otherwise treat as a text based file
+    try:
+        with open(filename, 'r', encoding='utf-8-sig') as file:
+            lines = file.readlines()
+    except FileNotFoundError:
+        print(f"ERROR: Could not find file: {filename}")
         return []
+
+    detected_type = "text"
+    # Skip header row if one exists and mark as CSV
+    if lines and any(key in lines[0].lower() for key in ["username", "samaccount", "domain"]):
+        lines = lines[1:]
+        detected_type = "CSV"
+    elif any(',' in l for l in lines[:5]):
+        detected_type = "CSV"
+
+    if DEBUG_MODE:
+        print(f"[DEBUG] {filename} detected as {detected_type}")
+
+    users = []
+    for line in lines:
+        line = line.rstrip('\n').replace('"', '')
+        if not line:
+            continue
+
+        if '@' in line:
+            parts = line.split('@', 1)
+            users.append({'USERNAME': parts[0], 'DOMAIN': parts[1]})
+        elif ',' in line:
+            parts = line.split(',', 1)
+            users.append({'USERNAME': parts[0], 'DOMAIN': parts[1]})
+        elif '\\' in line:
+            parts = line.split('\\', 1)
+            users.append({'USERNAME': parts[1], 'DOMAIN': parts[0]})
+        elif '/' in line:
+            parts = line.split('/', 1)
+            users.append({'USERNAME': parts[1], 'DOMAIN': parts[0]})
+        else:
+            users.append({'USERNAME': line, 'DOMAIN': None})
 
     return users
 
