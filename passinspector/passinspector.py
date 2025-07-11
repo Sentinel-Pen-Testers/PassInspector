@@ -87,7 +87,7 @@ def main():
     pi_data, dcsync_file_lines = check_domains(pi_data, dcsync_file_lines)
 
     # Create a list of User (see User class) objects
-    user_database = create_user_database(dcsync_file_lines, cleartext_creds, pi_data.enabled_users, password_file_lines)
+    user_database = create_user_database(dcsync_file_lines, cleartext_creds, password_file_lines)
 
     user_database = utils.fix_bad_passwords(user_database)
     user_database = utils.check_group_member(user_database, pi_data.kerberoastable_users, "kerberoastable")
@@ -249,7 +249,7 @@ def check_domains(pi_data, dcsync_file_lines):
 
     # Skip this if no admin/enabled/kerberoastable user files or Neo4j creds were provided
     if not pi_data.admin_users and not pi_data.enabled_users and not pi_data.kerberoastable_users and not pi_data.neo4j_password:
-        return dcsync_file_lines, pi_data.admin_users, pi_data.enabled_users, pi_data.kerberoastable_users
+        return pi_data, dcsync_file_lines
 
     # ------------------------------------------------------------
     # Phase 1: Extract domains from DCSync file lines
@@ -547,7 +547,7 @@ def replace_dcsync_domain_user_specific(pi_data, resolved_pairs, dcsync_file_lin
     return dcsync_file_lines
 
 
-def create_user_database(dcsync_file_lines, cleartext_creds, enabled_users, password_file_lines):
+def create_user_database(dcsync_file_lines, cleartext_creds, password_file_lines):
     user_database = []
     skipped_lines = []
 
