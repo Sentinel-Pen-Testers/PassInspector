@@ -1,0 +1,10 @@
+user01:Password1
+usera@example.com:alpha
+userb@example.com:bravo
+userc@example.com:charlie
+userd@example.com:delta
+usere@example.com:echo
+userf@example.com:foxtrot
+userg@example.com:golf
+userh@example.com:hotel
+useri@example.com:india
