@@ -1576,7 +1576,20 @@ def retrieve_cred_stuffing_results(pi_data):
 
 def get_cred_stuffing(pi_data):
     if pi_data.cred_stuffing_filename:
-        cred_stuffing_accounts = utils.open_file(pi_data.cred_stuffing_filename, pi_data.debug)
+        lines = utils.open_file(pi_data.cred_stuffing_filename, pi_data.debug)
+        cred_stuffing_accounts = []
+        for line in lines:
+            if ':' in line:
+                username, password = line.split(':', 1)
+            else:
+                parts = line.split()
+                if len(parts) == 2:
+                    username, password = parts
+                else:
+                    if pi_data.debug:
+                        print(f"Skipping malformed credential stuffing line: {line}")
+                    continue
+            cred_stuffing_accounts.append({'USERNAME': username, 'PASSWORD': password})
     elif os.path.isfile("passinspector_dehashed_results.txt"):
         cred_stuffing_accounts = import_dehashed_file()
     elif (pi_data.cred_stuffing_domains or pi_data.neo4j_password) and pi_data.dehashed:
