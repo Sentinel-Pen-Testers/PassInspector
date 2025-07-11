@@ -3,7 +3,7 @@ import json
 from neo4j import GraphDatabase
 import re
 from datetime import datetime
-from pathlib import Path
+from pass_inspector_args import PassInspectorArgs
 
 
 def fix_bad_passwords(user_database):
@@ -64,34 +64,6 @@ def file_to_userlist(filename=None):
     return users
 
 
-def find_file(include=None, exclude=None):
-    """
-    Search recursively from the current directory for the first file whose
-    full path contains all 'include' terms and none of the 'exclude' terms.
-
-    Args:
-        include (list of str): Substrings that must be present in the path
-        exclude (list of str): Substrings that must NOT be present in the path
-
-    Returns:
-        str or None: The matching file path as a string, or None if not found
-    """
-    include = include or []
-    exclude = exclude or []
-
-    for file_path in Path(".").rglob("*"):
-        if not file_path.is_file():
-            continue
-
-        full_path_str = str(file_path).lower()
-
-        if all(term.lower() in full_path_str for term in include) and \
-           not any(term.lower() in full_path_str for term in exclude):
-            return str(file_path)
-
-    return None
-
-
 def gather_arguments():
     # Create an argument parser
     parser = argparse.ArgumentParser(
@@ -105,7 +77,7 @@ def gather_arguments():
                                                'Overrides automatic Neo4j queries.')
 
     # Add the optional -c flag for comma-separated custom passwords to search for
-    parser.add_argument('-c', '--custom', help='(OPTIONAL) Comma-separated terms you would like searched '
+    parser.add_argument('-c', '--custom', default=[], help='(OPTIONAL) Comma-separated terms you would like searched '
                                                'for in passwords, such as the organization\'s name or acronym in lowercase')
 
     # Add the optional -cs flag for colon-separated credential stuffing file to override or replace BreachCreds results
@@ -124,7 +96,7 @@ def gather_arguments():
 
     parser.add_argument('-db', '--debug', help='(OPTIONAL) Turn on debug messages', action='store_true')
 
-    parser.add_argument('-dpi', '--duplicate-password-identifier', action="store_true",
+    parser.add_argument('-dpi', '--duplicate-password-identifier', action="store_true", default=False,
                         help='(OPTIONAL) Add a unique identifier for each password, so the customer can identify'
                              'password reuse without needing the passwords.')
 
@@ -146,13 +118,15 @@ def gather_arguments():
 
     parser.add_argument('-nd', '--no-dehashed', action='store_false', help='(OPTIONAL) Skip DeHashed search')
 
-    parser.add_argument('-nh', '--neo4j-hostname', help='(OPTIONAL) Neo4j hostname or IP (Default: localhost)')
+    parser.add_argument('-nh', '--neo4j-hostname', default='neo4j://localhost',
+                        help='(OPTIONAL) Neo4j hostname or IP (Default: localhost)')
 
-    parser.add_argument('-nu', '--neo4j-username', help='(OPTIONAL) Neo4j username for automatic queries '
-                                                        '(Default: neo4j)')
+    parser.add_argument('-nu', '--neo4j-username', default='neo4j',
+                        help='(OPTIONAL) Neo4j username for automatic queries (Default: neo4j)')
 
-    parser.add_argument('-np', '--neo4j-password', help='(OPTIONAL) Neo4j password for automatic queries. '
-                                                        'Must be specified for automatic queries to be attempted')
+    parser.add_argument('-np', '--neo4j-password', default="bloodhoundcommunityedition",
+                        help='(OPTIONAL) Neo4j password for automatic queries. '
+                             'Must be specified for automatic queries to be attempted')
 
     # Add the -p flag for a file containing cracked passwords
     parser.add_argument('-p', '--passwords', help='(REQUIRED) A file containing all of the cracked '
@@ -174,65 +148,22 @@ def gather_arguments():
     parser.add_argument('-su', '--spray-users', help='(OPTIONAL) Match cracked users to list of usernames '
                                                      'that will be sprayed.')
 
-    parser.add_argument('-nn', '--no-neo4j', action='store_true',
-                        help='(OPTIONAL) Disable all Neo4j checks')
-
     # Parse the command-line arguments
     args = parser.parse_args()
 
     global DEBUG_MODE
     DEBUG_MODE = args.debug
 
-    return (args.dcsync, args.passwords, args.spray_users, args.spray_passwords, args.duplicate_password_identifier,
-            args.no_dehashed, args.cred_stuffing_domains, args.prepare_hashes, args.custom, args.neo4j_hostname, args.neo4j_username,
-            args.neo4j_password, args.students, args.local_hashes, args.cred_stuffing, args.admins, args.enabled,
-            args.kerberoastable_users, args.no_neo4j, args.file_prefix)
+    pi_data = PassInspectorArgs(args)
+
+    return pi_data
 
 
-def get_filenames(file_datetime, dcsync_filename, passwords_filename, local_hash_filename, spray_users_filename, spray_passwords_filename):
-    if not file_datetime:
-        file_datetime = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-    if not dcsync_filename:
-        dcsync_filename = find_file([file_datetime, "dcsync"])
-        if dcsync_filename:
-            print(f"No DCSync file was provided, but a DCSync file was found: {dcsync_filename}")
-        else:
-            print("ERROR: No DCSync file provided or located automatically. Cannot continue!")
-            exit()
-
-    if not passwords_filename:
-        passwords_filename = find_file([file_datetime, "cracked"], ['allcracked'])
-        if passwords_filename:
-            print(f"No cracked file was provided, but a cracked file was found: {passwords_filename}")
-        else:
-            print("ERROR: No cracked file file provided or located automatically. Cannot continue!")
-            exit()
-
-    if not local_hash_filename:
-        local_hash_filename = find_file([file_datetime, "lsass"])
-        if local_hash_filename:
-            print(f"No list of local password hashes file was provided, but a file was found: {local_hash_filename}")
-
-    if not spray_users_filename:
-        spray_users_filename = find_file([file_datetime, "userlist"])
-        if spray_users_filename:
-            print(f"No list of sprayable users was provided, but a file was found: {spray_users_filename}")
-
-    if not spray_passwords_filename:
-        spray_passwords_filename = find_file([file_datetime, "passwords"])
-        if spray_users_filename:
-            print(f"No list of sprayable passwords was provided, but a file was found: {spray_users_filename}")
-
-
-    return file_datetime, dcsync_filename, passwords_filename, local_hash_filename, spray_users_filename, spray_passwords_filename
-
-
-def group_lookup(query, group_filename, neo4j_uri, neo4j_user, neo4j_pass, neo4j_queries, no_neo4j=False):
+def group_lookup(pi_data, query, group_filename):
     if group_filename:
         group = file_to_userlist(group_filename)
-    elif neo4j_pass and not no_neo4j:
-        group = neo4j_query(neo4j_queries[query], neo4j_uri, neo4j_user, neo4j_pass)
+    elif pi_data.neo4j_password:
+        group = neo4j_query(pi_data.neo4j_queries[query], pi_data.neo4j_url, pi_data.neo4j_username, pi_data.neo4j_password)
     else:
         group = []
 
