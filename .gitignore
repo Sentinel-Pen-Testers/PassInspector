@@ -1,0 +1,8 @@
+# Test output files
+*-NT_Hashes.txt
+passinspector_allcracked_*.txt
+passinspector_results_*.txt
+passinspector_dehashed_results.txt
+*.xlsx
+
+__pycache__/
