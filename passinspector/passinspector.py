@@ -6,9 +6,9 @@ import os
 import re
 import sys
 from tqdm import tqdm
-import utils
-import export_xlsx
-from pass_inspector_args import PassInspectorArgs
+from . import utils
+from . import export_xlsx
+from .pass_inspector_args import PassInspectorArgs
 
 class User:
     def __init__(self, domain, username, lmhash, nthash, password, cracked, has_lm,
@@ -1578,24 +1578,27 @@ def get_cred_stuffing(pi_data):
     if pi_data.cred_stuffing_filename:
         lines = utils.open_file(pi_data.cred_stuffing_filename, pi_data.debug)
         cred_stuffing_accounts = []
-        for line in lines:
-            if ':' in line:
-                username, password = line.split(':', 1)
-            else:
-                parts = line.split()
-                if len(parts) == 2:
-                    username, password = parts
+
+        with tqdm(total=len(lines), desc="Processing cred stuffing lines", ncols=100, leave=False) as pbar:
+            for line in lines:
+                if ':' in line:
+                    username, password = line.split(':', 1)
                 else:
-                    if pi_data.debug:
-                        print(f"Skipping malformed credential stuffing line: {line}")
-                    continue
-            cred_stuffing_accounts.append({'USERNAME': username, 'PASSWORD': password})
+                    parts = line.split()
+                    if len(parts) == 2:
+                        username, password = parts
+                    else:
+                        if pi_data.debug:
+                            print(f"Skipping malformed credential stuffing line: {line}")
+                        pbar.update(1)
+                        continue
+
+                cred_stuffing_accounts.append({'USERNAME': username, 'PASSWORD': password})
+                pbar.update(1)
+
     elif os.path.isfile("passinspector_dehashed_results.txt"):
         cred_stuffing_accounts = import_dehashed_file()
     elif (pi_data.cred_stuffing_domains or pi_data.neo4j_password) and pi_data.dehashed:
-        # If a credential_stuffing domain is provided, search with DeHashed
-        # If a password for Neo4j was provided, it will try to pull the email domain from AD
-        # MATCH (u:User) WHERE u.email IS NOT NULL RETURN distinct(split(u.email, '@')[1]) as DOMAIN
         cred_stuffing_accounts = retrieve_cred_stuffing_results(pi_data)
     else:
         cred_stuffing_accounts = []
