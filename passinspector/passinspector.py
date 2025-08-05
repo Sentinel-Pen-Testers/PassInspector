@@ -6,9 +6,8 @@ import os
 import re
 import sys
 from tqdm import tqdm
-from . import utils
-from . import export_xlsx
-from .pass_inspector_args import PassInspectorArgs
+from passinspector import utils
+from passinspector import export_xlsx
 
 class User:
     def __init__(self, domain, username, lmhash, nthash, password, cracked, has_lm,
