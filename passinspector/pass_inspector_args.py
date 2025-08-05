@@ -25,9 +25,9 @@ class PassInspectorArgs:
         self.neo4j_username = args.neo4j_username
         self.neo4j_password = args.neo4j_password
         self.neo4j_queries = {
-            "admins": "MATCH (u:User)-[:MemberOf*1..]->(g:Group) "
-                      "WHERE g.objectid ENDS WITH '-512' OR g.objectid ENDS WITH '-519' OR g.objectid ENDS WITH '-544' "
-                      "RETURN DISTINCT toLower(u.domain) + '\\\\' + toLower(u.samaccountname) AS user",
+            "admins": "MATCH (u:User) "
+                      "WHERE COALESCE(u.system_tags, '') CONTAINS 'admin_tier_0' "
+                      "RETURN toLower(u.domain) + '\\\\' + toLower(u.samaccountname) AS user",
             "enabled": "MATCH (u:User) WHERE u.enabled=true RETURN tolower(u.domain) + '\\\\' + "
                        "tolower(u.samaccountname) AS user",
             "kerberoastable": "MATCH (u:User)WHERE u.hasspn=true RETURN tolower(u.domain) + '\\\\' + "

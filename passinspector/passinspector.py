@@ -361,51 +361,62 @@ def domain_change_cli(unique_domain, no_match_text, domain_choices):
 
 def domain_change_tui(stdscr, unique_domain, no_match_text, domain_choices):
     import curses
-    selection_mode = True
-    stdscr.clear()
-    stdscr.addstr("============================================================================\n")
-    stdscr.addstr(f"The domain {unique_domain} doesn't appear to match the {no_match_text}.\n")
-    stdscr.addstr("If it is incorrect, PassInspector cannot correctly determine\n")
-    stdscr.addstr("if users are enabled, Kerberoastable, and/or administrative\n")
-    stdscr.addstr(f"Please enter the intended domain (from the {no_match_text})\n")
-    stdscr.addstr("Available options: \n")
-    stdscr.addstr("============================================================================\n")
 
     options = ["No change"] + list(domain_choices)
     selected_index = 0
+    selection_mode = True
+    selected_option = ""
+    header_lines = [
+        "============================================================================",
+        f"The domain {unique_domain} doesn't appear to match the {no_match_text}.",
+        "If it is incorrect, PassInspector cannot correctly determine",
+        "if users are enabled, Kerberoastable, and/or administrative",
+        f"Please enter the intended domain (from the {no_match_text})",
+        "Available options:",
+        "============================================================================"
+    ]
 
     while selection_mode:
-        for idx, option in enumerate(options):
-            if idx == selected_index:
-                stdscr.addstr(f"> {option}\n", curses.A_REVERSE)
-            else:
-                stdscr.addstr(f"  {option}\n")
+        stdscr.clear()
+        height, width = stdscr.getmaxyx()
 
+        total_required_lines = len(header_lines) + len(options) + 2
+        if total_required_lines > height:
+            stdscr.addstr(0, 0, "Screen too small to display all options. Resize the terminal.")
+            stdscr.refresh()
+            stdscr.getch()
+            return ""
+
+        # Print headers
+        for i, line in enumerate(header_lines):
+            stdscr.addstr(i, 0, line[:width - 1])
+
+        # Build and sort options
+        options = ["No change"] + sorted(domain_choices, key=lambda s: s.lower())
+
+        # Print options
+        start_y = len(header_lines)
+        for idx, option in enumerate(options):
+            y = start_y + idx
+            if y >= height - 1:
+                break  # Prevent overflow
+
+            line = f"> {option}" if idx == selected_index else f"  {option}"
+            attr = curses.A_REVERSE if idx == selected_index else curses.A_NORMAL
+            stdscr.addstr(y, 0, line[:width - 1], attr)
+
+        stdscr.refresh()
         key = stdscr.getch()
 
-        if key == curses.KEY_UP and selected_index > 0:
-            selected_index -= 1
-        elif key == curses.KEY_DOWN and selected_index < len(options) - 1:
-            selected_index += 1
-        elif key == curses.KEY_ENTER or key in [10, 13]:
+        if key in [curses.KEY_UP, ord('k')]:
+            selected_index = (selected_index - 1) % len(options)
+        elif key in [curses.KEY_DOWN, ord('j')]:
+            selected_index = (selected_index + 1) % len(options)
+        elif key in [curses.KEY_ENTER, 10, 13]:
             selected_option = options[selected_index]
             selection_mode = False
-            break
 
-        stdscr.clear()
-        stdscr.addstr("============================================================================\n")
-        stdscr.addstr(f"The domain {unique_domain} doesn't appear to match the {no_match_text}.\n")
-        stdscr.addstr("If it is incorrect, PassInspector cannot correctly determine\n")
-        stdscr.addstr("if users are enabled, Kerberoastable, and/or administrative\n")
-        stdscr.addstr(f"Please enter the intended domain (from the {no_match_text})\n")
-        stdscr.addstr("Available options: \n")
-        stdscr.addstr("============================================================================\n")
-
-    if selected_option in domain_choices:
-        new_domain = selected_option
-    else:
-        new_domain = ""
-    return new_domain
+    return selected_option if selected_option in domain_choices else ""
 
 
 def replace_imported_domain(old_domain, new_domain, admin_users, enabled_users, kerberoastable_users):
