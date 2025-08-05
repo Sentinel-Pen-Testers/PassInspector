@@ -3,7 +3,7 @@ import json
 from neo4j import GraphDatabase
 import re
 from datetime import datetime
-from pass_inspector_args import PassInspectorArgs
+from passinspector.pass_inspector_args import PassInspectorArgs
 
 # default debug mode value; updated by gather_arguments
 DEBUG_MODE = False
