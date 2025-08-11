@@ -6,8 +6,16 @@ import os
 import re
 import sys
 from tqdm import tqdm
-from passinspector import utils
-from passinspector import export_xlsx
+
+# Support running as a script or as part of the package
+if __package__ is None or __package__ == "":
+    # When executed directly, add the parent directory so absolute imports work
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from passinspector import utils  # type: ignore
+    from passinspector import export_xlsx  # type: ignore
+else:
+    from . import utils  # type: ignore
+    from . import export_xlsx  # type: ignore
 
 class User:
     def __init__(self, domain, username, lmhash, nthash, password, cracked, has_lm,

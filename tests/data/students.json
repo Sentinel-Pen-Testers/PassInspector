@@ -1,0 +1,7 @@
+[
+  {"u.samaccountname": "user1"},
+  {"u.samaccountname": null},
+  {"u.samaccountname": "astudentaccount"},
+  {"label": "TEST\\jsmith"},
+  "standalone"
+]

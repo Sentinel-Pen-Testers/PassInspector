@@ -274,19 +274,43 @@ def read_json_file(file_path):
 
     formatted_usernames = []
     for entry in records:
-        # pick the right field
-        if isinstance(entry, dict) and 'label' in entry:
-            raw = entry['label']
-        elif isinstance(entry, dict) and 'u.samaccountname' in entry:
-            raw = entry['u.samaccountname']
-        else:
+        raw = None
+
+        # Known structures
+        if isinstance(entry, dict):
+            if 'label' in entry:
+                raw = entry['label']
+            elif 'u.samaccountname' in entry:
+                raw = entry['u.samaccountname']
+            else:
+                # Try to dynamically locate a string field that looks like a username
+                for key, value in entry.items():
+                    if isinstance(value, str) and any(t in key.lower() for t in ['samaccount', 'username', 'name']):
+                        raw = value
+                        break
+        elif isinstance(entry, str):
+            raw = entry
+
+        # Skip entries where we failed to extract a usable string
+        if not raw or not isinstance(raw, str):
             print(f"Warning: skipping unrecognized entry: {entry}")
             continue
 
-        parts = raw.split('@', 1)
-        if len(parts) == 2:
+        raw = raw.strip()
+        if not raw:
+            continue
+
+        # Split out domain if present
+        if '@' in raw:
+            parts = raw.split('@', 1)
             formatted_usernames.append({"USERNAME": parts[0], "DOMAIN": parts[1]})
+        elif '\\' in raw:
+            parts = raw.split('\\', 1)
+            formatted_usernames.append({"USERNAME": parts[1], "DOMAIN": parts[0]})
+        elif '/' in raw:
+            parts = raw.split('/', 1)
+            formatted_usernames.append({"USERNAME": parts[1], "DOMAIN": parts[0]})
         else:
-            formatted_usernames.append({"USERNAME": parts[0]})
+            formatted_usernames.append({"USERNAME": raw})
 
     return formatted_usernames
