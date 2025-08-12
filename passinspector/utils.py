@@ -311,6 +311,6 @@ def read_json_file(file_path):
             parts = raw.split('/', 1)
             formatted_usernames.append({"USERNAME": parts[1], "DOMAIN": parts[0]})
         else:
-            formatted_usernames.append({"USERNAME": raw})
+            formatted_usernames.append({"USERNAME": raw, "DOMAIN": None})
 
     return formatted_usernames

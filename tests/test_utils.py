@@ -12,7 +12,7 @@ class UtilsJsonTests(unittest.TestCase):
         # The file contains one null entry which should be skipped
         self.assertEqual(len(users), 4)
         usernames = {u["USERNAME"] for u in users}
-        self.assertIn("user1", usernames)
+        self.assertIn("user01", usernames)
         self.assertIn("astudentaccount", usernames)
         self.assertIn("jsmith", usernames)
         self.assertIn("standalone", usernames)

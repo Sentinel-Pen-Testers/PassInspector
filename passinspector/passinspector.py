@@ -1451,11 +1451,23 @@ def prepare_hashes(pi_data):
 def parse_students(user_database, students_filename):
     print("Parsing students")
     students = utils.file_to_userlist(students_filename)
+
+    names = set()
+    domain_names = set()
+    for entry in students:
+        uname = entry.get('USERNAME')
+        domain = entry.get('DOMAIN')
+        if not uname:
+            continue
+        uname_l = uname.lower()
+        names.add(uname_l)
+        if domain:
+            domain_names.add((domain.lower(), uname_l))
+
     for user in user_database:
-        for student in students:
-            if user.username.lower() == student['USERNAME'].lower():
-                user.student = True
-                break
+        user_key = (user.domain.lower(), user.username.lower())
+        if user_key in domain_names or user.username.lower() in names:
+            user.student = True
     return user_database
 
 
