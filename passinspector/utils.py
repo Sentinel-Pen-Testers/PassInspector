@@ -260,7 +260,12 @@ def read_json_file(file_path):
         print(f"Error: File '{file_path}' not found.")
         return None
     except json.JSONDecodeError as e:
-        print(f"Error: Failed to decode JSON in file '{file_path}': {e}")
+        # Many callers try JSON first and fall back to text. Avoid noisy
+        # errors when a non-JSON file (e.g., a spray list) is provided.
+        if file_path.lower().endswith('.json'):
+            print(f"Error: Failed to decode JSON in file '{file_path}': {e}")
+        elif DEBUG_MODE:
+            print(f"[DEBUG] Failed JSON parse for '{file_path}': {e}")
         return None
 
     # decide which structure we're dealing with
