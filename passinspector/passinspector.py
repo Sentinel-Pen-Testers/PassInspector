@@ -6,8 +6,16 @@ import os
 import re
 import sys
 from tqdm import tqdm
-from passinspector import utils
-from passinspector import export_xlsx
+
+# Support running as a script or as part of the package
+if __package__ is None or __package__ == "":
+    # When executed directly, add the parent directory so absolute imports work
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from passinspector import utils  # type: ignore
+    from passinspector import export_xlsx  # type: ignore
+else:
+    from . import utils  # type: ignore
+    from . import export_xlsx  # type: ignore
 
 class User:
     def __init__(self, domain, username, lmhash, nthash, password, cracked, has_lm,
@@ -1443,11 +1451,23 @@ def prepare_hashes(pi_data):
 def parse_students(user_database, students_filename):
     print("Parsing students")
     students = utils.file_to_userlist(students_filename)
+
+    names = set()
+    domain_names = set()
+    for entry in students:
+        uname = entry.get('USERNAME')
+        domain = entry.get('DOMAIN')
+        if not uname:
+            continue
+        uname_l = uname.lower()
+        names.add(uname_l)
+        if domain:
+            domain_names.add((domain.lower(), uname_l))
+
     for user in user_database:
-        for student in students:
-            if user.username.lower() == student['USERNAME'].lower():
-                user.student = True
-                break
+        user_key = (user.domain.lower(), user.username.lower())
+        if user_key in domain_names or user.username.lower() in names:
+            user.student = True
     return user_database
 
 

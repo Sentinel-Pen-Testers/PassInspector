@@ -106,6 +106,7 @@ class PassInspectorArgs:
     def get_filenames(self):
         if not self.file_prefix:
             self.file_prefix = datetime.now().strftime("%Y%m%d_%H%M%S")
+            
             return
 
         if not self.dcsync_filename:

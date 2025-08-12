@@ -40,6 +40,11 @@ class PassInspectorTests(unittest.TestCase):
             result = run([flag, value])
             self.assertEqual(result.returncode, 0, msg=f"{flag}: {result.stdout}")
 
+    def test_json_students_file(self):
+        result = run(["-s", "tests/data/students.json"])
+        self.assertEqual(result.returncode, 0, msg=result.stdout)
+        self.assertIn("Student accounts cracked: 1/1", result.stdout)
+
     def test_all_option_output(self):
         args = [
             "-a", "tests/data/admins.txt",
