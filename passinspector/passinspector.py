@@ -5,6 +5,7 @@ import json
 import os
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
 
 # Support running as a script or as part of the package
@@ -143,9 +144,9 @@ def main():
     pbar.update(1)
     pbar.close()
     # Step 9: Check for password reuse (this takes a while compared to the others, so it gets its own loading bar)
-    user_database = count_pass_repeat(user_database)
+    user_database = count_pass_repeat(user_database, pi_data.threads)
     if pi_data.duplicate_pass_identifier:
-        user_database = calc_duplicate_password_identifier(user_database)
+        user_database = calc_duplicate_password_identifier(user_database, pi_data.threads)
 
     printed_stats = show_results(stat_enabled_shortest, stat_enabled_longest, stat_all_shortest, stat_all_longest,
                                  text_blank_passwords, text_terms, text_seasons, text_keyboard_walks,
@@ -1367,19 +1368,16 @@ def filter_dcsync_file(dcsync_file_lines):
     return dcsync_file_lines, cleartext_creds
 
 
-def calc_duplicate_password_identifier(user_database):
-    password_identifier_key = 0
-    password_identifiers = []
+def calc_duplicate_password_identifier(user_database, threads=4):
+    nthash_to_id = {}
+    for nthash in {user.nthash for user in user_database}:
+        nthash_to_id[nthash] = len(nthash_to_id)
 
-    for user in user_database:
-        for password_identifier in password_identifiers:
-            if user.nthash == password_identifier['NTHASH']:
-                user.pass_identifier = password_identifier['PASS_IDENTIFIER']
-                break
-        else:
-            password_identifiers.append({'NTHASH': user.nthash, 'PASS_IDENTIFIER': password_identifier_key})
-            user.pass_identifier = password_identifier_key
-            password_identifier_key += 1
+    def assign_identifier(user):
+        user.pass_identifier = nthash_to_id[user.nthash]
+
+    with ThreadPoolExecutor(max_workers=threads) as executor:
+        list(executor.map(assign_identifier, user_database))
 
     return user_database
 
@@ -1394,10 +1392,22 @@ def add_cleartext_creds(user_database, cleartext_creds):
     return user_database
 
 
-def count_pass_repeat(user_database):
-    for user in tqdm(user_database, desc="Counting password repeats (May take a while)", ncols=80, file=sys.stdout, leave=False):
-        pass_repeat_count = sum(1 for other_user in user_database if user.nthash == other_user.nthash)
-        user.pass_repeat = pass_repeat_count
+def count_pass_repeat(user_database, threads=4):
+    nthash_counts = {}
+    for user in user_database:
+        nthash_counts[user.nthash] = nthash_counts.get(user.nthash, 0) + 1
+
+    def assign_count(user):
+        user.pass_repeat = nthash_counts.get(user.nthash, 0)
+
+    with ThreadPoolExecutor(max_workers=threads) as executor:
+        list(tqdm(executor.map(assign_count, user_database),
+                  total=len(user_database),
+                  desc="Counting password repeats (May take a while)",
+                  ncols=80,
+                  file=sys.stdout,
+                  leave=False))
+
     return user_database
 
 
