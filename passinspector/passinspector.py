@@ -128,10 +128,10 @@ def main():
     text_username_passwords, result_username_passwords = username_password_search(user_database_cracked)
     pbar.update(1)
     # Step 4: Inspect administrative password reuse
-    text_admin_pass_reuse, results_admin_pass_reuse = admin_password_inspection(user_database)
+    text_admin_pass_reuse, results_admin_pass_reuse = admin_password_inspection(user_database, pi_data.threads)
     pbar.update(1)
     # Step 5: Inspect LM hash usage
-    text_lm_hashes, result_lm_hash_users = lm_hash_inspection(user_database)
+    text_lm_hashes, result_lm_hash_users = lm_hash_inspection(user_database, pi_data.threads)
     pbar.update(1)
     # Step 6: Identify enabled accounts with blank passwords
     text_blank_passwords, result_blank_enabled = blank_enabled_search(user_database, text_blank_passwords)
@@ -863,7 +863,7 @@ def username_password_search(user_database_cracked):
     return text_username_passwords, result_username_passwords
 
 
-def admin_password_inspection(user_database):
+def admin_password_inspection(user_database, threads=4):
     admin_password_matches = []
     text_password_matches = ""
 
@@ -871,51 +871,65 @@ def admin_password_inspection(user_database):
     admin_users = [user for user in user_database if user.is_admin]
     non_admin_users = [user for user in user_database if not user.is_admin]
 
+    # Pre-build a mapping of nthash to non-admin usernames and enabled counts
+    hash_to_nonadmins = {}
+    for user in non_admin_users:
+        entry = hash_to_nonadmins.setdefault(user.nthash, {"users": [], "enabled": 0})
+        entry["users"].append(user.username)
+        if user.enabled:
+            entry["enabled"] += 1
+
     enabled_admin_matches = 0
 
-    for admin in admin_users:
-        admin_hash = admin.nthash
-        matching_users = []
-        enabled_matching_users = 0
+    def inspect_admin(admin):
+        matches = hash_to_nonadmins.get(admin.nthash)
+        if not matches:
+            return None
+        return {
+            "ADMIN_USER": admin.username,
+            "NTHASH": admin.nthash,
+            "NON_ADMIN_USERS": matches["users"],
+            "ENABLED_NON_ADMIN_USERS": matches["enabled"],
+            "ADMIN_ENABLED": admin.enabled,
+        }
 
-        for non_admin in non_admin_users:
-            if non_admin.nthash == admin_hash:
-                matching_users.append(non_admin.username)
-                if non_admin.enabled:
-                    enabled_matching_users += 1
-
-        if matching_users:
-            if admin.enabled:
-                enabled_admin_matches += 1
-            admin_password_matches.append({
-                'ADMIN_USER': admin.username,
-                'NTHASH': admin_hash,
-                'NON_ADMIN_USERS': matching_users,
-                'ENABLED_NON_ADMIN_USERS': enabled_matching_users,
-            })
+    with ThreadPoolExecutor(max_workers=threads) as executor:
+        for result in executor.map(inspect_admin, admin_users):
+            if result:
+                if result["ADMIN_ENABLED"]:
+                    enabled_admin_matches += 1
+                admin_password_matches.append({
+                    "ADMIN_USER": result["ADMIN_USER"],
+                    "NTHASH": result["NTHASH"],
+                    "NON_ADMIN_USERS": result["NON_ADMIN_USERS"],
+                    "ENABLED_NON_ADMIN_USERS": result["ENABLED_NON_ADMIN_USERS"],
+                })
 
     if admin_password_matches:
-        text_password_matches = (f"There were {len(admin_password_matches)} instance(s) of an administrative user "
-                                 f"sharing a password with non-administrative accounts. "
-                                 f"{enabled_admin_matches} of these administrative accounts were enabled.")
+        text_password_matches = (
+            f"There were {len(admin_password_matches)} instance(s) of an administrative user "
+            f"sharing a password with non-administrative accounts. "
+            f"{enabled_admin_matches} of these administrative accounts were enabled."
+        )
 
     return text_password_matches, admin_password_matches
 
 
-def lm_hash_inspection(user_database):
-    lm_hash_users = []
+def lm_hash_inspection(user_database, threads=4):
+    def inspect(user):
+        return user if user.has_lm else None
+
+    with ThreadPoolExecutor(max_workers=threads) as executor:
+        lm_hash_users = [user for user in executor.map(inspect, user_database) if user]
+
+    enabled_lm_hash_users = sum(1 for user in lm_hash_users if user.enabled)
+
     text_results = ""
-    enabled_lm_hash_users = 0
-
-    for user in user_database:
-        if user.has_lm:
-            lm_hash_users.append(user)
-            if user.enabled:
-                enabled_lm_hash_users += 1
-
-    if len(lm_hash_users) > 0:
-        text_results = (f"LM hashes were found to be stored for {len(lm_hash_users)} account(s). "
-                        f"{enabled_lm_hash_users} of these accounts are enabled.")
+    if lm_hash_users:
+        text_results = (
+            f"LM hashes were found to be stored for {len(lm_hash_users)} account(s). "
+            f"{enabled_lm_hash_users} of these accounts are enabled."
+        )
 
     return text_results, lm_hash_users
 
