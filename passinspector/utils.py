@@ -168,6 +168,9 @@ def gather_arguments():
     parser.add_argument('-su', '--spray-users', help='(OPTIONAL) Match cracked users to list of usernames '
                                                      'that will be sprayed.')
 
+    parser.add_argument('-t', '--threads', type=int, default=4,
+                        help='(OPTIONAL) Number of threads to use for intensive operations (default: 4)')
+
     # Parse the command-line arguments
     args = parser.parse_args()
 
