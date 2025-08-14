@@ -867,43 +867,32 @@ def admin_password_inspection(user_database, threads=4):
     admin_password_matches = []
     text_password_matches = ""
 
-    # Filter admin and non-admin users
-    admin_users = [user for user in user_database if user.is_admin]
-    non_admin_users = [user for user in user_database if not user.is_admin]
-
-    # Pre-build a mapping of nthash to non-admin usernames and enabled counts
-    hash_to_nonadmins = {}
-    for user in non_admin_users:
-        entry = hash_to_nonadmins.setdefault(user.nthash, {"users": [], "enabled": 0})
-        entry["users"].append(user.username)
-        if user.enabled:
-            entry["enabled"] += 1
+    # Build hash lookups for admin and non-admin users in a single pass
+    admin_hashes = {}
+    nonadmin_hashes = {}
+    for user in user_database:
+        if user.is_admin:
+            entry = admin_hashes.setdefault(user.nthash, [])
+            entry.append(user)
+        else:
+            entry = nonadmin_hashes.setdefault(user.nthash, {"users": [], "enabled": 0})
+            entry["users"].append(user.username)
+            if user.enabled:
+                entry["enabled"] += 1
 
     enabled_admin_matches = 0
 
-    def inspect_admin(admin):
-        matches = hash_to_nonadmins.get(admin.nthash)
-        if not matches:
-            return None
-        return {
-            "ADMIN_USER": admin.username,
-            "NTHASH": admin.nthash,
-            "NON_ADMIN_USERS": matches["users"],
-            "ENABLED_NON_ADMIN_USERS": matches["enabled"],
-            "ADMIN_ENABLED": admin.enabled,
-        }
-
-    with ThreadPoolExecutor(max_workers=threads) as executor:
-        for result in executor.map(inspect_admin, admin_users):
-            if result:
-                if result["ADMIN_ENABLED"]:
-                    enabled_admin_matches += 1
-                admin_password_matches.append({
-                    "ADMIN_USER": result["ADMIN_USER"],
-                    "NTHASH": result["NTHASH"],
-                    "NON_ADMIN_USERS": result["NON_ADMIN_USERS"],
-                    "ENABLED_NON_ADMIN_USERS": result["ENABLED_NON_ADMIN_USERS"],
-                })
+    # Only iterate through hashes shared between admin and non-admin users
+    for nthash in set(admin_hashes) & set(nonadmin_hashes):
+        for admin in admin_hashes[nthash]:
+            if admin.enabled:
+                enabled_admin_matches += 1
+            admin_password_matches.append({
+                "ADMIN_USER": admin.username,
+                "NTHASH": nthash,
+                "NON_ADMIN_USERS": nonadmin_hashes[nthash]["users"],
+                "ENABLED_NON_ADMIN_USERS": nonadmin_hashes[nthash]["enabled"],
+            })
 
     if admin_password_matches:
         text_password_matches = (
