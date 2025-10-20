@@ -38,6 +38,7 @@ class PassInspectorArgs:
         self.students_filename = args.students
         self.spray_users_filename = args.spray_users
         self.spray_passwords_filename = args.spray_passwords
+        self.threads = args.threads
         self.output_filename = None
 
     @staticmethod
