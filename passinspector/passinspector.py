@@ -73,10 +73,10 @@ def main():
         calculate_password_long_short(user_database)
     pbar.update(1)
     # Step 2: Perform password search on cracked users
-    (text_custom_search, result_custom_search) = perform_password_search(user_database_cracked, pi_data.custom_search_terms)
+    (text_custom_search, result_custom_search) = perform_password_search(user_database, pi_data.custom_search_terms)
     pbar.update(1)
     # Step 3: Search for usernames used as passwords
-    for user in user_database_cracked:
+    for user in user_database:
         user.check_notable_password()
         user.check_blank_password()
     pbar.update(1)
@@ -102,13 +102,15 @@ def main():
                                  text_custom_search, text_admin_pass_reuse, text_lm_hashes,
                                  text_cred_stuffing, num_spray_matches,
                                  num_pass_spray_matches, user_database)
-    stats.print_statistics(user_database_cracked, pi_data.output_filename)
+    # The following will return a list of lines to write to the log file
+    stats_to_write_to_file = stats.print_statistics(user_database, pi_data.output_filename)
 
     print("\nWriting out files")
-    write_cracked_file(printed_stats, pi_data.file_prefix, user_database_cracked, result_enabled_shortest_passwords,
+    write_cracked_file(printed_stats, pi_data.file_prefix, user_database, result_enabled_shortest_passwords,
                        result_enabled_longest_passwords, result_all_shortest_passwords, result_all_longest_passwords,
-                       result_custom_search, results_admin_pass_reuse, result_lm_hash_users, result_cred_stuffing)
-    export_xlsx.write_xlsx(pi_data.file_prefix, user_database_cracked)
+                       result_custom_search, results_admin_pass_reuse, result_lm_hash_users, result_cred_stuffing,
+                       stats_to_write_to_file)
+    export_xlsx.write_xlsx(pi_data.file_prefix, user_database)
     print("Done!")
 
 
@@ -542,7 +544,7 @@ def create_user_database(dcsync_file_lines, cleartext_creds, password_file_lines
 
         # Create a User object and add it to the database
         user_database.append(
-            User(
+            user.User(
                 domain=domain,
                 username=username,
                 lmhash=lmhash,
@@ -755,7 +757,7 @@ def perform_password_search(user_database_cracked, search_terms):
     )
 
 
-def admin_password_inspection(user_database):
+def admin_password_inspection(user_database, threads):
     admin_password_matches = []
     text_password_matches = ""
 
@@ -1039,7 +1041,8 @@ def show_results(stat_enabled_shortest, stat_enabled_longest, stat_all_shortest,
 
 def write_cracked_file(printed_stats, file_datetime, user_database, result_enabled_shortest_passwords,
                        result_enabled_longest_passwords, result_all_shortest_passwords, result_all_longest_passwords,
-                       result_custom_search, results_admin_pass_reuse, result_lm_hash_users, result_cred_stuffing):
+                       result_custom_search, results_admin_pass_reuse, result_lm_hash_users, result_cred_stuffing,
+                       stats_to_write_to_file):
     output_filename = f"passinspector_results_{file_datetime}.txt"
     print(f"Writing each of the results to {output_filename}")
     results = []
@@ -1073,19 +1076,19 @@ def write_cracked_file(printed_stats, file_datetime, user_database, result_enabl
     results.extend([
         user.username
         for user in user_database
-        if user.enabled and "Common Term" in user.noticable_passwords
+        if user.enabled and "Common Term" in user.notable_passwords
     ])
     results.append("\n=======================\nENABLED ACCOUNTS WITH SEASON PASSWORDS\n=======================")
     results.extend([
         user.username
         for user in user_database
-        if user.enabled and "Season" in user.noticable_passwords
+        if user.enabled and "Season" in user.notable_passwords
     ])
     results.append("\n=======================\nENABLED ACCOUNTS WITH KEYBOARD WALK PASSWORDS\n=======================")
     results.extend([
         user.username
         for user in user_database
-        if user.enabled and "Keyboard Walk" in user.noticable_passwords
+        if user.enabled and "Keyboard Walk" in user.notable_passwords
     ])
     if result_custom_search:
         results.append("")
@@ -1118,6 +1121,9 @@ def write_cracked_file(printed_stats, file_datetime, user_database, result_enabl
         results.append("=======================")
         for account in result_cred_stuffing:
             results.append(account)
+
+    results.extend(stats_to_write_to_file)
+
     with open(output_filename, 'w') as outfile:
         for result in results:
             outfile.write(f"{result}\n")
