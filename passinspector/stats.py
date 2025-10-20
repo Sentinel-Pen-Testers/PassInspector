@@ -48,6 +48,9 @@ def print_statistics(user_database, output_filename):
     print_username_passwords(notable_users, output_filename)
     print_common_passwords(notable_users, output_filename)
 
+    stats_to_write_to_file = print_uncracked_lm_hashes(user_database, output_filename)
+    return stats_to_write_to_file
+
 def print_username_passwords(notable_users, output_filename):
     count_user_in_pass = 0
     count_user_in_pass_enabled = 0
@@ -110,3 +113,24 @@ def print_blank_passwords(user_database, output_filename):
 
     if count_blank_password_enabled > 0:
         log_message(output_filename, f"{count_blank_password_enabled} enabled users with blank passwords were found. ")
+
+def print_uncracked_lm_hashes(user_database, output_filename):
+    result_message = []
+    uncracked_lm_hashes_users = [
+        user
+        for user in user_database
+        if getattr(user, "lmhash", None)
+           and not getattr(user, "password", None)
+           and getattr(user, "lmhash", "").lower() != "aad3b435b51404eeaad3b435b51404ee"
+    ]
+    if uncracked_lm_hashes_users:
+        uncracked_lm_hashes = list(set([user.lmhash for user in uncracked_lm_hashes_users]))
+        uncracked_lm_hashes_enabled = [user.lmhash for user in uncracked_lm_hashes_users if getattr(user, "enabled", True)]
+        log_message(output_filename, f"{len(uncracked_lm_hashes)} LM hashes were not cracked. {len(uncracked_lm_hashes_enabled)} of these belonged to enabled users.")
+
+
+        result_message.extend(["=======================", "UNCRACKED LM HASHES", "======================="])
+        result_message.extend(uncracked_lm_hashes)
+
+
+    return result_message
