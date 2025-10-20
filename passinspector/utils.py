@@ -260,7 +260,6 @@ def read_json_file(file_path):
         print(f"Error: File '{file_path}' not found.")
         return None
     except json.JSONDecodeError as e:
-        print(f"Error: Failed to decode JSON in file '{file_path}': {e}")
         return None
 
     # decide which structure we're dealing with

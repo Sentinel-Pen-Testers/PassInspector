@@ -3,13 +3,13 @@ import xlsxwriter
 HEADERS = [
     'DOMAIN', 'USERNAME', 'LMHASH', 'NTHASH', 'PASSWORD', 'CRACKED', 'HAS_LM',
     'BLANK_PASSWORD', 'ENABLED', 'IS_ADMIN', 'KERBEROASTABLE', 'STUDENT',
-    'LOCAL_PASS_REPEAT', 'PASS_REPEAT_COUNT', 'SPRAY_USER', 'SPRAY_PASSWORD', 'EMAIL',
+    'LOCAL_PASS_REPEAT', 'PASS_REPEAT_COUNT', 'SPRAY_USER', 'SPRAY_PASSWORD', 'NOTABLE PASSWORD', 'EMAIL',
     'JOB_TITLE', 'DESCRIPTION'
 ]
 
 HIDE_COLUMNS = {'LMHASH', 'NTHASH'}
 CONDITIONAL_HIDE_COLUMNS = {'ENABLED', 'IS_ADMIN', 'KERBEROASTABLE', 'STUDENT',
-                            'LOCAL_PASS_REPEAT', 'SPRAY_USER', 'SPRAY_PASSWORD', 'EMAIL'}
+                            'LOCAL_PASS_REPEAT', 'SPRAY_USER', 'SPRAY_PASSWORD', 'NOTABLE PASSWORD', 'EMAIL'}
 
 
 def create_formats(workbook):
@@ -32,13 +32,14 @@ def prepare_data(user_database):
     total_rows = len(user_database)
 
     for user in user_database:
+        notable_str = ", ".join(map(str, user.notable_password)) if user.notable_password else ""
         values = [
             user.domain, user.username, user.lmhash, user.nthash,
             user.password if user.password else "",
             str(user.cracked), str(user.has_lm), str(user.blank_password),
             str(user.enabled), str(user.is_admin), str(user.kerberoastable),
             str(user.student), user.local_pass_repeat, user.pass_repeat,
-            user.spray_user, user.spray_password, user.email,
+            user.spray_user, user.spray_password, notable_str, user.email,
             user.job_title if user.job_title else "",
             user.description if user.description else ""
         ]

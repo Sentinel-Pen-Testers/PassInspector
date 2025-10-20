@@ -4,5 +4,6 @@ passinspector_allcracked_*.txt
 passinspector_results_*.txt
 passinspector_dehashed_results.txt
 *.xlsx
+files/*
 
 __pycache__/

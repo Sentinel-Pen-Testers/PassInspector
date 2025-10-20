@@ -38,6 +38,7 @@ class PassInspectorArgs:
         self.students_filename = args.students
         self.spray_users_filename = args.spray_users
         self.spray_passwords_filename = args.spray_passwords
+        self.output_filename = None
 
     @staticmethod
     def find_file(include=None, exclude=None):
@@ -155,3 +156,5 @@ class PassInspectorArgs:
 
         if not self.file_prefix:
             self.file_prefix = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        self.output_filename = f"passinspector_results_{self.file_prefix}.txt"

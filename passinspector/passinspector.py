@@ -1,50 +1,11 @@
 #!/usr/bin/env python
-import binascii
 from neo4j import GraphDatabase
 import json
 import os
 import re
 import sys
 from tqdm import tqdm
-from passinspector import utils
-from passinspector import export_xlsx
-
-class User:
-    def __init__(self, domain, username, lmhash, nthash, password, cracked, has_lm,
-                 blank_password, enabled, is_admin, kerberoastable, student, local_pass_repeat, pass_repeat, email,
-                 job_title, description, spray_user, spray_password):
-        self.domain = domain
-        self.username = username
-        self.lmhash = lmhash
-        self.nthash = nthash
-        self.password = password
-        self.cracked = cracked
-        self.has_lm = has_lm
-        self.blank_password = blank_password
-        self.enabled = enabled
-        self.is_admin = is_admin
-        self.kerberoastable = kerberoastable
-        self.student = student
-        self.local_pass_repeat = local_pass_repeat
-        self.pass_repeat = pass_repeat
-        self.email = email
-        self.job_title = job_title
-        self.description = description
-        self.spray_user = spray_user
-        self.spray_password = spray_password
-
-    def fix_password(self):
-        """Fixes a password if it is in HEX format."""
-        if "$HEX[" in self.password:
-            try:
-                self.password = dehexify(self.password)
-            except Exception as e:
-                print(f"Failed to dehexify password for {self.username}: {e}")
-
-    def check_membership(self, group_members, attribute):
-        for group_member in group_members:
-            if self.username.lower() == group_member['USERNAME'].lower() and self.domain.lower() == group_member['DOMAIN'].lower():
-                setattr(self, attribute, True)
+from passinspector import dehexify, stats, export_xlsx, utils, user
 
 
 def main():
@@ -111,21 +72,18 @@ def main():
         calculate_password_long_short(user_database)
     pbar.update(1)
     # Step 2: Perform password search on cracked users
-    (text_blank_passwords, text_terms, text_seasons, text_keyboard_walks, text_custom_search, result_blank_passwords,
-     result_common_terms, result_seasons, result_keyboard_walks, result_custom_search) = \
-        perform_password_search(user_database_cracked, pi_data.custom_search_terms)
+    (text_custom_search, result_custom_search) = perform_password_search(user_database_cracked, pi_data.custom_search_terms)
     pbar.update(1)
     # Step 3: Search for usernames used as passwords
-    text_username_passwords, result_username_passwords = username_password_search(user_database_cracked)
+    for user in user_database_cracked:
+        user.check_notable_password()
+        user.check_blank_password()
     pbar.update(1)
     # Step 4: Inspect administrative password reuse
     text_admin_pass_reuse, results_admin_pass_reuse = admin_password_inspection(user_database)
     pbar.update(1)
     # Step 5: Inspect LM hash usage
     text_lm_hashes, result_lm_hash_users = lm_hash_inspection(user_database)
-    pbar.update(1)
-    # Step 6: Identify enabled accounts with blank passwords
-    text_blank_passwords, result_blank_enabled = blank_enabled_search(user_database, text_blank_passwords)
     pbar.update(1)
     # Step 7: Check for credential stuffing matches
     text_cred_stuffing, result_cred_stuffing = cred_stuffing_check(pi_data.cred_stuffing_accounts, user_database)
@@ -140,18 +98,16 @@ def main():
         user_database = calc_duplicate_password_identifier(user_database)
 
     printed_stats = show_results(stat_enabled_shortest, stat_enabled_longest, stat_all_shortest, stat_all_longest,
-                                 text_blank_passwords, text_terms, text_seasons, text_keyboard_walks,
-                                 text_custom_search, text_username_passwords, text_admin_pass_reuse, text_lm_hashes,
+                                 text_custom_search, text_admin_pass_reuse, text_lm_hashes,
                                  text_cred_stuffing, num_spray_matches,
                                  num_pass_spray_matches, user_database)
+    stats.print_statistics(user_database_cracked, pi_data.output_filename)
 
-    print("Writing out files")
-    write_cracked_file(printed_stats, pi_data.file_prefix, user_database, result_enabled_shortest_passwords,
+    print("\nWriting out files")
+    write_cracked_file(printed_stats, pi_data.file_prefix, user_database_cracked, result_enabled_shortest_passwords,
                        result_enabled_longest_passwords, result_all_shortest_passwords, result_all_longest_passwords,
-                       result_blank_passwords, result_common_terms, result_seasons, result_keyboard_walks,
-                       result_custom_search, result_username_passwords, results_admin_pass_reuse, result_lm_hash_users,
-                       result_blank_enabled, result_cred_stuffing)
-    export_xlsx.write_xlsx(pi_data.file_prefix, user_database)
+                       result_custom_search, results_admin_pass_reuse, result_lm_hash_users, result_cred_stuffing)
+    export_xlsx.write_xlsx(pi_data.file_prefix, user_database_cracked)
     print("Done!")
 
 
@@ -585,7 +541,7 @@ def create_user_database(dcsync_file_lines, cleartext_creds, password_file_lines
 
         # Create a User object and add it to the database
         user_database.append(
-            User(
+            user.User(
                 domain=domain,
                 username=username,
                 lmhash=lmhash,
@@ -632,25 +588,10 @@ def check_if_cracked(nt_hash, password_file_lines):
             continue
         if stored_nt_hash == nt_hash:
             if '$HEX[' in password:
-                password = dehexify(password)
+                password = dehexify.dehexify(password)
             return password, True
     # If this code is running, no password was found, so return false
     return "", False
-
-
-def dehexify(password):
-    dehexed_password = "ERROR DECODING HEX"
-    try:
-        # Remove the "$HEX[" prefix and "]" suffix
-        hex_string = password[len("$HEX["):-1]
-        dehexed_password = binascii.unhexlify(hex_string).decode(
-            'latin-1')  # Using latin-1 to account for other languages like German
-        # dehexed_password = binascii.unhexlify(hex_string).decode('latin-1', 'replace') # Will stop errors,
-        # but only by replacing problematic characters
-    except binascii.Error:
-        # Handle the case where the hex conversion fails
-        print("ERROR: Could not dehexify the following value: ", password)
-    return dehexed_password
 
 
 def check_if_admin(user, domain, admin_users):
@@ -808,50 +749,9 @@ def perform_password_search(user_database_cracked, search_terms):
                                       f"{', '.join(search_terms)}{leet_text}. {enabled_counts['custom_search']} of these belonged to enabled users.")
 
     return (
-        stats["blank_passwords"],
-        stats["terms"],
-        stats["seasons"],
-        stats["keyboard_walks"],
         stats["custom_search"],
-        result_blank_passwords,
-        result_common_terms,
-        result_seasons,
-        result_keyboard_walks,
         result_custom_search,
     )
-
-
-def username_password_search(user_database_cracked):
-    text_username_passwords = ""
-    result_username_passwords = []
-    count_username_password = 0
-    count_username_password_exact = 0
-    count_enabled_users = 0
-    count_enabled_users_exact = 0
-
-    for user in user_database_cracked:
-        username = user.username.lower()
-        password = user.password.lower() if user.password else ""
-
-        if username in password or password in username:
-            count_username_password += 1
-            result_username_passwords.append(user)
-            if user.enabled:
-                count_enabled_users += 1
-            if username == password:
-                count_username_password_exact += 1
-                if user.enabled:
-                    count_enabled_users_exact += 1
-
-    if count_username_password > 0:
-        text_username_passwords = (f"There were {count_username_password} account(s) using their username as part "
-                                   f"of their password. {count_enabled_users} of these belonged to enabled users.")
-        if count_username_password_exact > 0:
-            text_username_passwords += (f" {count_username_password_exact} of these account(s) used their username "
-                                        f"as their password without any additional complexity, and "
-                                        f"{count_enabled_users_exact} of these belonged to enabled users.")
-
-    return text_username_passwords, result_username_passwords
 
 
 def admin_password_inspection(user_database):
@@ -1056,11 +956,9 @@ def calculate_cracked(user_database):
             len(user_database), all_crack_percent)
 
 
-def show_results(stat_enabled_shortest, stat_enabled_longest, stat_all_shortest, stat_all_longest, text_blank_passwords,
-                 text_terms, text_seasons, text_keyboard_walks,
-                 text_custom_search, text_username_passwords, text_admin_pass_reuse, text_lm_hashes, text_cred_stuffing,
-                 stat_spray_matches,
-                 stat_spray_pass_matches, user_database):
+def show_results(stat_enabled_shortest, stat_enabled_longest, stat_all_shortest, stat_all_longest,
+                 text_custom_search, text_admin_pass_reuse, text_lm_hashes, text_cred_stuffing,
+                 stat_spray_matches, stat_spray_pass_matches, user_database):
     da_cracked, da_total = calc_da_cracked(user_database)
     stat_total_uniq, uniq_cracked_percent, stat_cracked_uniq = calculate_unique_hashes(user_database)
     avg_pass_len, student_avg_pass_len, enabled_avg_pass_len = average_pass_length(user_database)
@@ -1105,17 +1003,12 @@ def show_results(stat_enabled_shortest, stat_enabled_longest, stat_all_shortest,
     results_text += utils.print_and_log(f"Longest password length: {stat_all_longest}", results_text)
     results_text += utils.print_and_log(f"Longest password length for an enabled account: {stat_enabled_longest}",
                                         results_text)
-    results_text += utils.print_and_log(text_blank_passwords, results_text) if text_blank_passwords else ""
     local_pass_repeated = count_local_hash(user_database)
     if local_pass_repeated > 0:
         results_text += utils.print_and_log(f"There {'were' if local_pass_repeated > 1 else 'was'} "
                                             f"{local_pass_repeated} account{'s' if local_pass_repeated > 1 else ''} found "
                                             f"with a password hash matching a local account.", results_text)
-    results_text += utils.print_and_log(text_terms, results_text) if text_terms else ""
-    results_text += utils.print_and_log(text_seasons, results_text) if text_seasons else ""
-    results_text += utils.print_and_log(text_keyboard_walks, results_text) if text_keyboard_walks else ""
     results_text += utils.print_and_log(text_custom_search, results_text) if text_custom_search else ""
-    results_text += utils.print_and_log(text_username_passwords, results_text) if text_username_passwords else ""
     results_text += utils.print_and_log(text_admin_pass_reuse, results_text) if text_admin_pass_reuse else ""
     results_text += utils.print_and_log(text_lm_hashes, results_text) if text_lm_hashes else ""
     results_text += utils.print_and_log(text_cred_stuffing, results_text) if text_cred_stuffing else ""
@@ -1125,29 +1018,13 @@ def show_results(stat_enabled_shortest, stat_enabled_longest, stat_all_shortest,
     if stat_spray_pass_matches != 123456:
         utils.print_and_log(f"Number Enabled Accounts with Sprayable Passwords: {stat_spray_pass_matches}",
                             results_text)
-    print("")
-    print("")
-    print("")
 
     return results_text
 
 
 def write_cracked_file(printed_stats, file_datetime, user_database, result_enabled_shortest_passwords,
                        result_enabled_longest_passwords, result_all_shortest_passwords, result_all_longest_passwords,
-                       result_blank_passwords, result_common_terms, result_seasons, result_keyboard_walks,
-                       result_custom_search, result_username_passwords, results_admin_pass_reuse, result_lm_hash_users,
-                       result_blank_enabled, result_cred_stuffing):
-    output_filename = f"passinspector_allcracked_{file_datetime}.txt"
-    print(f"Writing all cracked passwords to {output_filename}")
-    results = ["USERNAME,PASSWORD,ENABLED,ADMIN,STUDENT"]
-    for user in user_database:
-        if user.cracked:
-            result = f"{user.username},{user.password},{user.enabled},{user.is_admin},{user.student}"
-            results.append(result)
-    with open(output_filename, 'w') as outfile:
-        for result in results:
-            outfile.write(result + '\n')
-
+                       result_custom_search, results_admin_pass_reuse, result_lm_hash_users, result_cred_stuffing):
     output_filename = f"passinspector_results_{file_datetime}.txt"
     print(f"Writing each of the results to {output_filename}")
     results = []
@@ -1175,58 +1052,32 @@ def write_cracked_file(printed_stats, file_datetime, user_database, result_enabl
     results.append("=======================")
     for record in result_all_longest_passwords:
         results.append(record)
-    if result_blank_passwords:
-        results.append("")
-        results.append("=======================")
-        results.append("ACCOUNTS WITH BLANK PASSWORDS")
-        results.append("=======================")
-        for record in result_blank_passwords:
-            results.append(record.username)
-    if result_blank_enabled:
-        results.append("")
-        results.append("=======================")
-        results.append("ENABLED ACCOUNTS WITH BLANK PASSWORDS")
-        results.append("=======================")
-        for user in result_blank_enabled:
-            results.append(user.username)
-    if result_common_terms:
-        results.append("")
-        results.append("=======================")
-        results.append("COMMON TERM PASSWORDS")
-        results.append("=======================")
-        for record in result_common_terms:
-            result = f"{record.username},{record.password}"
-            results.append(result)
-    if result_seasons:
-        results.append("")
-        results.append("=======================")
-        results.append("SEASON PASSWORDS")
-        results.append("=======================")
-        for record in result_seasons:
-            result = f"{record.username},{record.password}"
-            results.append(result)
-    if result_keyboard_walks:
-        results.append("")
-        results.append("=======================")
-        results.append("KEYBOARD WALK PASSWORDS")
-        results.append("=======================")
-        for record in result_keyboard_walks:
-            result = f"{record.username},{record.password}"
-            results.append(result)
+    results.append("\n=======================\nENABLED ACCOUNTS WITH BLANK PASSWORDS\n=======================")
+    results.extend([user.username for user in user_database if getattr(user, "blank_password", False) and getattr(user, "enabled", True)])
+    results.append("\n=======================\nENABLED ACCOUNTS WITH COMMON PASSWORDS\n=======================")
+    results.extend([
+        user.username
+        for user in user_database
+        if user.enabled and "Common Term" in user.noticable_passwords
+    ])
+    results.append("\n=======================\nENABLED ACCOUNTS WITH SEASON PASSWORDS\n=======================")
+    results.extend([
+        user.username
+        for user in user_database
+        if user.enabled and "Season" in user.noticable_passwords
+    ])
+    results.append("\n=======================\nENABLED ACCOUNTS WITH KEYBOARD WALK PASSWORDS\n=======================")
+    results.extend([
+        user.username
+        for user in user_database
+        if user.enabled and "Keyboard Walk" in user.noticable_passwords
+    ])
     if result_custom_search:
         results.append("")
         results.append("=======================")
         results.append("CUSTOM SEARCH TERM PASSWORDS")
         results.append("=======================")
         for record in result_custom_search:
-            result = f"{record.username},{record.password}"
-            results.append(result)
-    if result_username_passwords:
-        results.append("")
-        results.append("=======================")
-        results.append("USERNAMES AS PASSWORDS")
-        results.append("=======================")
-        for record in result_username_passwords:
             result = f"{record.username},{record.password}"
             results.append(result)
     if results_admin_pass_reuse:
