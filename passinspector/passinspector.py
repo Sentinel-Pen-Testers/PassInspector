@@ -1076,19 +1076,19 @@ def write_cracked_file(printed_stats, file_datetime, user_database, result_enabl
     results.extend([
         user.username
         for user in user_database
-        if user.enabled and "Common Term" in user.notable_passwords
+        if user.enabled and "Common Term" in user.notable_password
     ])
     results.append("\n=======================\nENABLED ACCOUNTS WITH SEASON PASSWORDS\n=======================")
     results.extend([
         user.username
         for user in user_database
-        if user.enabled and "Season" in user.notable_passwords
+        if user.enabled and "Season" in user.notable_password
     ])
     results.append("\n=======================\nENABLED ACCOUNTS WITH KEYBOARD WALK PASSWORDS\n=======================")
     results.extend([
         user.username
         for user in user_database
-        if user.enabled and "Keyboard Walk" in user.notable_passwords
+        if user.enabled and "Keyboard Walk" in user.notable_password
     ])
     if result_custom_search:
         results.append("")
