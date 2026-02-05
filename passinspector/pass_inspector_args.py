@@ -30,11 +30,11 @@ class PassInspectorArgs:
                       "RETURN toLower(u.domain) + '\\\\' + toLower(u.samaccountname) AS user",
             "enabled": "MATCH (u:User) WHERE u.enabled=true RETURN tolower(u.domain) + '\\\\' + "
                        "tolower(u.samaccountname) AS user",
-            "kerberoastable": "MATCH (u:User)"
-                       "WHERE u.hasspn=true"
-                       "AND NOT u.objectid ENDS WITH '-502'"
-                       "AND NOT COALESCE(u.gmsa, false) = true"
-                       "AND NOT COALESCE(u.msa, false) = true"
+            "kerberoastable": "MATCH (u:User) "
+                       "WHERE u.hasspn=true "
+                       "AND NOT u.objectid ENDS WITH '-502' "
+                       "AND NOT COALESCE(u.gmsa, false) = true "
+                       "AND NOT COALESCE(u.msa, false) = true "
                        "RETURN tolower(u.domain) + '\\\\' + tolower(u.samaccountname) AS user"
         }
         self.cracked_hash_filename = args.passwords
