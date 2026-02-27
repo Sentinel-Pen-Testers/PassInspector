@@ -24,6 +24,7 @@ class User:
         self.spray_user = spray_user
         self.spray_password = spray_password
         self.notable_password = []
+        self.lacks_aes = False
 
     def fix_password(self):
         """Fixes a password if it is in HEX format."""
