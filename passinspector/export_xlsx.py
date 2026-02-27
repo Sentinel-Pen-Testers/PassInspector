@@ -1,6 +1,6 @@
 import xlsxwriter
 
-HEADERS = [
+BASE_HEADERS = [
     'DOMAIN', 'USERNAME', 'LMHASH', 'NTHASH', 'PASSWORD', 'CRACKED', 'HAS_LM',
     'BLANK_PASSWORD', 'ENABLED', 'IS_ADMIN', 'KERBEROASTABLE', 'STUDENT',
     'LOCAL_PASS_REPEAT', 'PASS_REPEAT_COUNT', 'SPRAY_USER', 'SPRAY_PASSWORD', 'NOTABLE PASSWORD', 'EMAIL',
@@ -24,9 +24,16 @@ def create_formats(workbook):
     return cell_format, header_format
 
 
-def prepare_data(user_database):
+def get_headers(user_database):
+    headers = list(BASE_HEADERS)
+    if any(getattr(user, "lacks_aes", False) for user in user_database):
+        headers.append("LACKS_AES")
+    return headers
+
+
+def prepare_data(user_database, headers):
     """Prepares data for writing, tracks column widths, and determines conditional column visibility."""
-    column_widths = [len(header) for header in HEADERS]
+    column_widths = [len(header) for header in headers]
     data = []
     false_counts = {key: 0 for key in CONDITIONAL_HIDE_COLUMNS}
     total_rows = len(user_database)
@@ -43,12 +50,14 @@ def prepare_data(user_database):
             user.job_title if user.job_title else "",
             user.description if user.description else ""
         ]
+        if "LACKS_AES" in headers:
+            values.append(str(getattr(user, "lacks_aes", False)))
         data.append(values)
 
         for col_index, value in enumerate(values):
             column_widths[col_index] = max(column_widths[col_index], len(str(value)))
-            if HEADERS[col_index] in CONDITIONAL_HIDE_COLUMNS and value == "False":
-                false_counts[HEADERS[col_index]] += 1
+            if headers[col_index] in CONDITIONAL_HIDE_COLUMNS and value == "False":
+                false_counts[headers[col_index]] += 1
 
     return data, column_widths, false_counts, total_rows
 
@@ -64,12 +73,14 @@ def write_xlsx(file_date, user_database):
 
         worksheet.freeze_panes(1, 0)  # Freeze top row
 
+        headers = get_headers(user_database)
+
         # Write headers
-        for col, header in enumerate(HEADERS):
+        for col, header in enumerate(headers):
             worksheet.write(0, col, header, header_format)
 
         # Prepare data
-        data, column_widths, false_counts, total_rows = prepare_data(user_database)
+        data, column_widths, false_counts, total_rows = prepare_data(user_database, headers)
 
         # Write data
         for row, row_values in enumerate(data, start=1):
@@ -81,8 +92,8 @@ def write_xlsx(file_date, user_database):
             worksheet.set_column(col, col, width)
 
         # Hide specific columns
-        for col, header in enumerate(HEADERS):
+        for col, header in enumerate(headers):
             if header in HIDE_COLUMNS or (header in CONDITIONAL_HIDE_COLUMNS and false_counts[header] == total_rows):
                 worksheet.set_column(col, col, None, None, {'hidden': True})
 
-        worksheet.autofilter(0, 0, len(user_database), len(HEADERS) - 1)  # Enable filtering
+        worksheet.autofilter(0, 0, len(user_database), len(headers) - 1)  # Enable filtering

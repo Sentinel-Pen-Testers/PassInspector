@@ -7,13 +7,12 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
 from passinspector import dehexify, stats, export_xlsx, utils, user
+from passinspector.check_for_no_aes import check_for_no_aes
 
 
 def main():
-    script_version = 2.5
-    print("\n==============================")
-    print("PassInspector  -  Version", script_version)
-    print("==============================\n")
+    script_version = 2.6
+    utils.print_beginning(script_version)
 
     pi_data = utils.gather_arguments()
     # Handle user error in the provided variables
@@ -97,6 +96,7 @@ def main():
     user_database = count_pass_repeat(user_database, pi_data.threads)
     if pi_data.duplicate_pass_identifier:
         user_database = calc_duplicate_password_identifier(user_database, pi_data.threads)
+    user_database = check_for_no_aes(pi_data.dcsync_filename, user_database)
 
     printed_stats = show_results(stat_enabled_shortest, stat_enabled_longest, stat_all_shortest, stat_all_longest,
                                  text_custom_search, text_admin_pass_reuse, text_lm_hashes,
@@ -1020,6 +1020,9 @@ def show_results(stat_enabled_shortest, stat_enabled_longest, stat_all_shortest,
     results_text += utils.print_and_log(f"Longest password length: {stat_all_longest}", results_text)
     results_text += utils.print_and_log(f"Longest password length for an enabled account: {stat_enabled_longest}",
                                         results_text)
+    lacks_aes_count = sum(1 for user in user_database if getattr(user, "lacks_aes", False))
+    if lacks_aes_count > 0:
+        results_text += utils.print_and_log(f"Accounts lacking AES hashes: {lacks_aes_count}", results_text)
     local_pass_repeated = count_local_hash(user_database)
     if local_pass_repeated > 0:
         results_text += utils.print_and_log(f"There {'were' if local_pass_repeated > 1 else 'was'} "
@@ -1090,6 +1093,13 @@ def write_cracked_file(printed_stats, file_datetime, user_database, result_enabl
         for user in user_database
         if user.enabled and "Keyboard Walk" in user.notable_password
     ])
+    results.append("\n=======================\nNO AES HASH USERS\n=======================")
+    no_aes_users = sorted({
+        f"{user.domain}\\{user.username}" if getattr(user, "domain", "").upper() != "NONE" else user.username
+        for user in user_database
+        if getattr(user, "lacks_aes", False)
+    })
+    results.extend(no_aes_users)
     if result_custom_search:
         results.append("")
         results.append("=======================")

@@ -4,9 +4,32 @@ from neo4j import GraphDatabase
 import re
 from datetime import datetime
 from passinspector.pass_inspector_args import PassInspectorArgs
+from rich.console import Console
+from rich.panel import Panel
+from rich.text import Text
+from rich.align import Align
 
 # default debug mode value; updated by gather_arguments
 DEBUG_MODE = False
+
+def print_beginning(version):
+    body = Text()
+    body.append("PassInspector\n", style="bold cyan")
+    body.append("Troy Wilson ", style="white")
+    body.append("• ", style="dim")
+    body.append("Shellman\n", style="dim")
+    body.append("Luke Lauterbach ", style="white")
+    body.append("• ", style="dim")
+    body.append("Sentinel Technologies\n", style="dim")
+    body.append(f"\nVersion {version}", style="dim")
+
+    Console().print(
+        Panel.fit(
+            Align.center(body),
+            border_style="cyan",
+            padding=(0, 2),
+        )
+    )
 
 
 def fix_bad_passwords(user_database):
