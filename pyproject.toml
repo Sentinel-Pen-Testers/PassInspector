@@ -14,7 +14,7 @@ dependencies = [
     "xlsxwriter",
     "neo4j",
     "requests",
-    "windows-curses; platform_system == 'Windows'",  # Fixed missing comma
+    "windows-curses; platform_system == 'Windows' and python_version < '3.14'",
     "tqdm"
 ]
 requires-python = ">=3.7"
