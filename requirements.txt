@@ -1,5 +1,5 @@
 xlsxwriter
 neo4j
 requests
-windows-curses; platform_system == "Windows"
+windows-curses; platform_system == "Windows" and python_version < "3.14"
 tqdm
