@@ -14,6 +14,7 @@ dependencies = [
     "xlsxwriter",
     "neo4j",
     "requests",
+    "rich",
     "windows-curses; platform_system == 'Windows' and python_version < '3.14'",
     "tqdm"
 ]
