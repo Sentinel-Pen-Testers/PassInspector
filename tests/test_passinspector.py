@@ -1,11 +1,16 @@
 import subprocess
 import sys
 from pathlib import Path
+from contextlib import redirect_stdout
+from io import StringIO
+from types import SimpleNamespace
 import unittest
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT_DIR / "tests" / "data"
 PASSINSPECTOR = ROOT_DIR / "passinspector" / "passinspector.py"
+
+from passinspector.passinspector import show_results
 
 BASE_ARGS = [sys.executable, str(PASSINSPECTOR),
              "-d", str(DATA_DIR / "dcsync.txt"),
@@ -19,6 +24,33 @@ def run(args):
 
 
 class PassInspectorTests(unittest.TestCase):
+    def test_aes_summary_counts_enabled_accounts_only(self):
+        def user(username, enabled, lacks_aes):
+            return SimpleNamespace(
+                domain="test.local",
+                username=username,
+                nthash=username,
+                password="Password1",
+                cracked=True,
+                student=False,
+                enabled=enabled,
+                is_admin=False,
+                local_pass_repeat=0,
+                lacks_aes=lacks_aes,
+            )
+
+        user_database = [
+            user("enabled-no-aes", True, True),
+            user("disabled-no-aes", False, True),
+            user("enabled-with-aes", True, False),
+        ]
+
+        with redirect_stdout(StringIO()):
+            results = show_results(9, 9, 9, 9, "", "", "", "", 123456, 123456, user_database)
+
+        self.assertIn("Enabled accounts lacking AES hashes: 1", results)
+        self.assertNotIn("Accounts lacking AES hashes:", results)
+
     def test_basic(self):
         result = run([])
         self.assertEqual(result.returncode, 0, msg=result.stdout)
