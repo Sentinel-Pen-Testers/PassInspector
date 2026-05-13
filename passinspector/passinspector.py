@@ -1020,9 +1020,12 @@ def show_results(stat_enabled_shortest, stat_enabled_longest, stat_all_shortest,
     results_text += utils.print_and_log(f"Longest password length: {stat_all_longest}", results_text)
     results_text += utils.print_and_log(f"Longest password length for an enabled account: {stat_enabled_longest}",
                                         results_text)
-    lacks_aes_count = sum(1 for user in user_database if getattr(user, "lacks_aes", False))
+    lacks_aes_count = sum(
+        1 for user in user_database
+        if getattr(user, "lacks_aes", False) and getattr(user, "enabled", False)
+    )
     if lacks_aes_count > 0:
-        results_text += utils.print_and_log(f"Accounts lacking AES hashes: {lacks_aes_count}", results_text)
+        results_text += utils.print_and_log(f"Enabled accounts lacking AES hashes: {lacks_aes_count}", results_text)
     local_pass_repeated = count_local_hash(user_database)
     if local_pass_repeated > 0:
         results_text += utils.print_and_log(f"There {'were' if local_pass_repeated > 1 else 'was'} "
