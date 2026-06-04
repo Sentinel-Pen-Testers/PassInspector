@@ -6,7 +6,7 @@ import re
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
-from passinspector import dehexify, stats, export_xlsx, utils, user
+from passinspector import dehexify, stats, export_xlsx, utils, user, lm_hash_cracker
 from passinspector.check_for_no_aes import check_for_no_aes
 
 
@@ -59,6 +59,8 @@ def main():
         user_database = parse_students(user_database, pi_data.students_filename)
     if pi_data.local_hash_filename:
         user_database = parse_local_hashes(user_database, pi_data.local_hash_filename)
+
+    lm_hash_cracker.prompt_for_hashcat_binary(user_database)
 
     for user in user_database:
         if user.cracked:
