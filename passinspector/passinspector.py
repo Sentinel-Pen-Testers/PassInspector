@@ -561,6 +561,7 @@ def create_user_database(dcsync_file_lines, cleartext_creds, password_file_lines
                 student=student,
                 local_pass_repeat=local_pass_repeat,
                 pass_repeat=pass_repeat,
+                pass_repeat_accounts=[],
                 email=None,
                 job_title=None,
                 description=None,
@@ -1272,11 +1273,18 @@ def add_cleartext_creds(user_database, cleartext_creds):
 
 def count_pass_repeat(user_database, threads=4):
     nthash_counts = {}
+    nthash_accounts = {}
     for user in user_database:
         nthash_counts[user.nthash] = nthash_counts.get(user.nthash, 0) + 1
+        nthash_accounts.setdefault(user.nthash, []).append(user)
 
     def assign_count(user):
         user.pass_repeat = nthash_counts.get(user.nthash, 0)
+        user.pass_repeat_accounts = [
+            f"{matching_user.domain}\\{matching_user.username}"
+            for matching_user in nthash_accounts.get(user.nthash, [])
+            if matching_user is not user
+        ]
 
     with ThreadPoolExecutor(max_workers=threads) as executor:
         list(tqdm(executor.map(assign_count, user_database),

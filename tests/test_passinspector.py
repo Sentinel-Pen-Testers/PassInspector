@@ -10,7 +10,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT_DIR / "tests" / "data"
 PASSINSPECTOR = ROOT_DIR / "passinspector" / "passinspector.py"
 
-from passinspector.passinspector import show_results
+from passinspector.passinspector import count_pass_repeat, show_results
 
 BASE_ARGS = [sys.executable, str(PASSINSPECTOR),
              "-d", str(DATA_DIR / "dcsync.txt"),
@@ -24,6 +24,24 @@ def run(args):
 
 
 class PassInspectorTests(unittest.TestCase):
+    def test_count_pass_repeat_adds_matching_account_list(self):
+        def user(domain, username, nthash):
+            return SimpleNamespace(domain=domain, username=username, nthash=nthash)
+
+        user_database = [
+            user("DOMAIN", "user1", "same_hash"),
+            user("DOMAIN", "user2", "same_hash"),
+            user("DOMAIN", "user3", "other_hash"),
+        ]
+
+        with redirect_stdout(StringIO()):
+            count_pass_repeat(user_database, threads=1)
+
+        self.assertEqual(user_database[0].pass_repeat, 2)
+        self.assertEqual(user_database[0].pass_repeat_accounts, ["DOMAIN\\user2"])
+        self.assertEqual(user_database[1].pass_repeat_accounts, ["DOMAIN\\user1"])
+        self.assertEqual(user_database[2].pass_repeat_accounts, [])
+
     def test_aes_summary_counts_enabled_accounts_only(self):
         def user(username, enabled, lacks_aes):
             return SimpleNamespace(
