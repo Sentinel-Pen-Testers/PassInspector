@@ -2,8 +2,9 @@ from passinspector import dehexify
 
 class User:
     def __init__(self, domain, username, lmhash, nthash, password, cracked, has_lm,
-                 blank_password, enabled, is_admin, kerberoastable, student, local_pass_repeat, pass_repeat, email,
-                 job_title, description, spray_user, spray_password):
+                 blank_password, enabled, is_admin, kerberoastable, student, local_pass_repeat, pass_repeat,
+                 pass_repeat_accounts=None, email=None, job_title=None, description=None, spray_user=False,
+                 spray_password=False):
         self.domain = domain
         self.username = username
         self.lmhash = lmhash
@@ -18,6 +19,7 @@ class User:
         self.student = student
         self.local_pass_repeat = local_pass_repeat
         self.pass_repeat = pass_repeat
+        self.pass_repeat_accounts = pass_repeat_accounts or []
         self.email = email
         self.job_title = job_title
         self.description = description

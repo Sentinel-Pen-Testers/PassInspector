@@ -3,13 +3,14 @@ import xlsxwriter
 BASE_HEADERS = [
     'DOMAIN', 'USERNAME', 'LMHASH', 'NTHASH', 'PASSWORD', 'CRACKED', 'HAS_LM',
     'BLANK_PASSWORD', 'ENABLED', 'IS_ADMIN', 'KERBEROASTABLE', 'STUDENT',
-    'LOCAL_PASS_REPEAT', 'PASS_REPEAT_COUNT', 'SPRAY_USER', 'SPRAY_PASSWORD', 'NOTABLE PASSWORD', 'EMAIL',
-    'JOB_TITLE', 'DESCRIPTION'
+    'LOCAL_PASS_REPEAT', 'PASS_REPEAT_COUNT', 'PASS_REPEAT_ACCOUNTS', 'SPRAY_USER', 'SPRAY_PASSWORD',
+    'NOTABLE PASSWORD', 'EMAIL', 'JOB_TITLE', 'DESCRIPTION'
 ]
 
 HIDE_COLUMNS = {'LMHASH', 'NTHASH'}
 CONDITIONAL_HIDE_COLUMNS = {'ENABLED', 'IS_ADMIN', 'KERBEROASTABLE', 'STUDENT',
                             'LOCAL_PASS_REPEAT', 'SPRAY_USER', 'SPRAY_PASSWORD', 'NOTABLE PASSWORD', 'EMAIL'}
+FIXED_WIDTH_COLUMNS = {'PASS_REPEAT_ACCOUNTS'}
 
 
 def create_formats(workbook):
@@ -31,6 +32,10 @@ def get_headers(user_database):
     return headers
 
 
+def format_pass_repeat_accounts(user):
+    return ", ".join(map(str, getattr(user, "pass_repeat_accounts", [])))
+
+
 def prepare_data(user_database, headers):
     """Prepares data for writing, tracks column widths, and determines conditional column visibility."""
     column_widths = [len(header) for header in headers]
@@ -46,7 +51,7 @@ def prepare_data(user_database, headers):
             str(user.cracked), str(user.has_lm), str(user.blank_password),
             str(user.enabled), str(user.is_admin), str(user.kerberoastable),
             str(user.student), user.local_pass_repeat, user.pass_repeat,
-            user.spray_user, user.spray_password, notable_str, user.email,
+            format_pass_repeat_accounts(user), user.spray_user, user.spray_password, notable_str, user.email,
             user.job_title if user.job_title else "",
             user.description if user.description else ""
         ]
@@ -55,7 +60,8 @@ def prepare_data(user_database, headers):
         data.append(values)
 
         for col_index, value in enumerate(values):
-            column_widths[col_index] = max(column_widths[col_index], len(str(value)))
+            if headers[col_index] not in FIXED_WIDTH_COLUMNS:
+                column_widths[col_index] = max(column_widths[col_index], len(str(value)))
             if headers[col_index] in CONDITIONAL_HIDE_COLUMNS and value == "False":
                 false_counts[headers[col_index]] += 1
 
@@ -67,7 +73,7 @@ def write_xlsx(file_date, user_database):
     out_filename = f"passinspector_results_{file_date}.xlsx"
     print(f"Writing results in Excel format to {out_filename}")
 
-    with xlsxwriter.Workbook(out_filename) as workbook:
+    with xlsxwriter.Workbook(out_filename, {'strings_to_formulas': False}) as workbook:
         worksheet = workbook.add_worksheet()
         cell_format, header_format = create_formats(workbook)
 

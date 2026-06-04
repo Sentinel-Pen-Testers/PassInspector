@@ -385,6 +385,7 @@ if __name__ == "__main__":
         student=False,
         local_pass_repeat=0,
         pass_repeat=0,
+        pass_repeat_accounts=[],
         email="dummy.user@example.local",
         job_title="Test User",
         description="Dummy user for lm_hash_cracker direct execution.",
