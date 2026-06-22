@@ -305,7 +305,7 @@ def prompt_for_hashcat_binary(users):
     Prompt for hashcat when uncracked LM hashes are present.
 
     Returns LmCrackResult when cracking is attempted. Returns None when there
-    are no uncracked LM hashes, when the user declines, or when the supplied
+    are no uncracked LM hashes, when the user skips, or when the supplied
     hashcat path is invalid.
     """
     uncracked_lm_count = count_uncracked_lm_hashes(users)
@@ -313,15 +313,15 @@ def prompt_for_hashcat_binary(users):
     if uncracked_lm_count == 0:
         return None
 
-    response = input(
+    hashcat_binary = input(
         f"{uncracked_lm_count} uncracked LM hashes found. "
-        "Do you want to try to crack them? "
+        "Enter the path to your hashcat binary (leave blank to skip): "
     )
 
-    if response.strip().lower() not in {"y", "yes"}:
+    if not hashcat_binary.strip():
+        print("Skipping hashcat LM cracking.")
         return None
 
-    hashcat_binary = input("Enter the path of your hashcat binary:")
     if not is_valid_hashcat_binary(hashcat_binary):
         print(f"Invalid hashcat binary path: {hashcat_binary}")
         return None
